@@ -119,6 +119,5 @@ This project proves that point. Understanding how every byte is written, read, o
 ├── storage/
 │   ├── wal.go           # WAL write & replay logic
 │   ├── index.go         # In-memory keydir
-│   ├── writer.go        # Write serialization via goroutine
 └── README.md
 ```
