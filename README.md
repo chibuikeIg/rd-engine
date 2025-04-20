@@ -118,7 +118,8 @@ This project proves that point. Understanding how every byte is written, read, o
 ├── main.go
 ├── storage/             # Datafiles e.g
 ├── core/
-│   ├── wal.go           # WAL write & replay logic
-│   ├── index.go         # In-memory keydir
+│   ├── Lss.go           # WAL write & replay logic
+│   ├── Hashtable.go     # In-memory keydir
+│   ├── Segment.go
 └── README.md
 ```
