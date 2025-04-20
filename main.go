@@ -9,22 +9,21 @@ import (
 	"os"
 	"strings"
 
-	"reversed-database.engine/storage"
+	"reversed-database.engine/core"
 )
 
 var bufferedChannel = make(chan Data, 50)
 
 func main() {
+	hashTable := core.NewHashTable(50)
+
+	lss := core.NewLSS(hashTable)
 
 	l, err := net.Listen("tcp", "0.0.0.0:1379")
 	if err != nil {
 		fmt.Println("Failed to bind to port 1379")
 		os.Exit(1)
 	}
-
-	hashTable := storage.NewHashTable(50)
-
-	lss := storage.NewLSS(hashTable, "simple-db.txt")
 
 	go handleDataWrites(lss)
 
@@ -40,7 +39,7 @@ func main() {
 	}
 }
 
-func readConn(conn net.Conn, lss *storage.LSS) {
+func readConn(conn net.Conn, lss *core.LSS) {
 	conn.Write([]byte("Connected\r\n"))
 	// Rebuild HashTable
 	ioReader := bufio.NewReader(lss.File)
@@ -85,7 +84,6 @@ func readConn(conn net.Conn, lss *storage.LSS) {
 
 			if commands[0] != "set" && commands[0] != "get" {
 				conn.Write([]byte("no valid commands provided\r\n"))
-				fmt.Println(commands)
 			}
 
 			if len(commands) == 3 && commands[0] == "set" {
@@ -109,9 +107,13 @@ func readConn(conn net.Conn, lss *storage.LSS) {
 }
 
 // Handle write serialization
-func handleDataWrites(Lss *storage.LSS) {
+func handleDataWrites(lss *core.LSS) {
+	defer lss.File.Close()
 	for {
 		data := <-bufferedChannel
-		Lss.Set(data.Key, data.Value)
+		_, err := lss.Set(data.Key, data.Value)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 }

@@ -1,4 +1,4 @@
-package storage
+package core
 
 import (
 	"bufio"
@@ -13,24 +13,33 @@ import (
 
 // Log structured storage
 type LSS struct {
-	Ht   *HashTable
-	File *os.File
+	Ht          *HashTable
+	File        *os.File
+	activeSegID string
 }
 
-func NewLSS(ht *HashTable, filename string) *LSS {
+func NewLSS(ht *HashTable) *LSS {
+
+	storagePath := "./storage"
+	segment := NewSegment(storagePath)
+	activeSegID, err := segment.GetActiveSegmentID()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	file := storagePath + "/" + activeSegID + ".data.txt"
 	// Create a single instance of file
-	f, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC, 0644)
+	f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC, 0644)
 
 	if err != nil {
 		log.Fatalln(err)
 	}
 
-	defer f.Close()
-
-	return &LSS{ht, f}
+	return &LSS{ht, f, activeSegID}
 }
 
 func (lss *LSS) Set(key string, value any) (string, error) {
+
 	// Get Byte offset for indexing
 	byteOffset, err := lss.File.Seek(0, io.SeekEnd)
 	if err != nil {
@@ -42,7 +51,6 @@ func (lss *LSS) Set(key string, value any) (string, error) {
 	val, err := json.Marshal(value)
 	data := bytes.Join([][]byte{keyInByte, val}, []byte(","))
 	data = append(data, '\n')
-
 	if err != nil {
 		log.Fatal(err)
 	}

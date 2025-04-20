@@ -3,12 +3,12 @@ package main
 import (
 	"os"
 
-	"reversed-database.engine/storage"
+	"reversed-database.engine/core"
 )
 
 type Data struct {
 	Key         string
 	Value       any
-	HashTable   *storage.HashTable
+	HashTable   *core.HashTable
 	StorageFile *os.File
 }

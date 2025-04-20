@@ -115,8 +115,9 @@ This project proves that point. Understanding how every byte is written, read, o
 
 ```bash
 .
-├── main.go              # Entry point
-├── storage/
+├── main.go
+├── storage/             # Datafiles e.g
+├── core/
 │   ├── wal.go           # WAL write & replay logic
 │   ├── index.go         # In-memory keydir
 └── README.md
