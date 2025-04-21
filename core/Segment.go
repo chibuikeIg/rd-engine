@@ -5,10 +5,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
-)
 
-// Maximum file/segment size
-const mfs = 3025
+	"reversed-database.engine/config"
+)
 
 type Segment struct {
 	SegmentPaths string
@@ -59,7 +58,7 @@ func (s *Segment) GetActiveSegmentID() (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		if activeFile.Size() >= int64(mfs) {
+		if activeFile.Size() >= config.MFS {
 			segmentId += 1
 		}
 	}

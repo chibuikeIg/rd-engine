@@ -116,7 +116,9 @@ This project proves that point. Understanding how every byte is written, read, o
 ```bash
 .
 ├── main.go
-├── storage/             # Datafiles e.g
+├── storage/
+├── config/
+│   ├── segment.go       # Segment Configurations e.g Maximum segment size
 ├── core/
 │   ├── Lss.go           # WAL write & replay logic
 │   ├── Hashtable.go     # In-memory keydir

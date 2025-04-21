@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"reversed-database.engine/config"
 	"reversed-database.engine/core"
 )
 
@@ -111,9 +112,6 @@ func readConn(conn net.Conn, lss *core.LSS) {
 	}
 }
 
-// Maximum file/segment size
-const mfs = 3025
-
 // Handle write serialization
 func handleDataWrites(lss *core.LSS) {
 	defer lss.File.Close()
@@ -125,7 +123,7 @@ func handleDataWrites(lss *core.LSS) {
 		log.Fatal(err)
 	}
 
-	if fInfo.Size() >= int64(mfs) {
+	if fInfo.Size() >= config.MFS {
 		if err != nil {
 			log.Fatal(err)
 		}
