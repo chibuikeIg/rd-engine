@@ -1,7 +1,6 @@
 package core
 
 import (
-	"fmt"
 	"io/fs"
 	"os"
 	"strconv"
@@ -9,13 +8,14 @@ import (
 )
 
 // Maximum file/segment size
-var mfs = 3025
+const mfs = 3025
 
 type Segment struct {
 	SegmentPaths string
 }
 
-func NewSegment(segmentsPath string) *Segment {
+func NewSegment() *Segment {
+	segmentsPath := "./storage"
 	return &Segment{segmentsPath}
 }
 
@@ -41,30 +41,36 @@ func (s *Segment) Segments() ([]fs.FileInfo, error) {
 	return segments, nil
 }
 
-func (s *Segment) GetActiveSegmentID() (string, error) {
+func (s *Segment) GetActiveSegmentID() (int, error) {
 
-	activeSeg := "01"
+	segmentId := 1
 	segments, err := s.Segments()
 
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 
 	if len(segments) > 0 {
 
 		activeFile := segments[len(segments)-1]
-		activeSeg = activeFile.Name()
-		activeFNameSlice := strings.SplitN(activeSeg, ".", 3)
-		id, err := strconv.Atoi(activeFNameSlice[0])
+		fName := activeFile.Name()
+		activeFNameSlice := strings.SplitN(fName, ".", 3)
+		segmentId, err := strconv.Atoi(activeFNameSlice[0])
 		if err != nil {
-			return "", err
+			return 0, err
 		}
-		fmt.Println(activeFile.Size())
 		if activeFile.Size() >= int64(mfs) {
-			id += 1
+			segmentId += 1
 		}
-		activeSeg = "0" + strconv.Itoa(id)
 	}
 
-	return activeSeg, nil
+	return segmentId, nil
+}
+
+func (s *Segment) CreateSegment(segmentID int) (*os.File, error) {
+	formatedSegmentID := "0" + strconv.Itoa(segmentID)
+	file := s.SegmentPaths + "/" + formatedSegmentID + ".data.txt"
+	// Create a single instance of file
+	f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC, 0644)
+	return f, err
 }

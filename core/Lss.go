@@ -15,21 +15,18 @@ import (
 type LSS struct {
 	Ht          *HashTable
 	File        *os.File
-	activeSegID string
+	ActiveSegID int
 }
 
 func NewLSS(ht *HashTable) *LSS {
 
-	storagePath := "./storage"
-	segment := NewSegment(storagePath)
+	segment := NewSegment()
 	activeSegID, err := segment.GetActiveSegmentID()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	file := storagePath + "/" + activeSegID + ".data.txt"
-	// Create a single instance of file
-	f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC, 0644)
+	f, err := segment.CreateSegment(activeSegID)
 
 	if err != nil {
 		log.Fatalln(err)

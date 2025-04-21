@@ -87,7 +87,12 @@ func readConn(conn net.Conn, lss *core.LSS) {
 			}
 
 			if len(commands) == 3 && commands[0] == "set" {
-				bufferedChannel <- Data{Key: commands[1], Value: strings.Trim(commands[2], "\b"), HashTable: lss.Ht, StorageFile: lss.File}
+				bufferedChannel <- Data{
+					Key:         commands[1],
+					Value:       strings.Trim(commands[2], "\b"),
+					HashTable:   lss.Ht,
+					StorageFile: lss.File,
+				}
 			}
 
 			if len(commands) == 2 && commands[0] == "get" {
@@ -106,9 +111,32 @@ func readConn(conn net.Conn, lss *core.LSS) {
 	}
 }
 
+// Maximum file/segment size
+const mfs = 3025
+
 // Handle write serialization
 func handleDataWrites(lss *core.LSS) {
 	defer lss.File.Close()
+
+	// Checks file size and creates new segment
+	// if full
+	fInfo, err := lss.File.Stat()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if fInfo.Size() >= int64(mfs) {
+		if err != nil {
+			log.Fatal(err)
+		}
+		lss.ActiveSegID += 1
+		segment := core.NewSegment()
+		lss.File, err = segment.CreateSegment(lss.ActiveSegID)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
 	for {
 		data := <-bufferedChannel
 		_, err := lss.Set(data.Key, data.Value)
