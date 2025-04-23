@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"unicode/utf8"
 )
 
@@ -45,7 +46,7 @@ func (ht HashTable) Set(key string, val any) {
 
 }
 
-func (ht HashTable) Get(key string) any {
+func (ht HashTable) Get(key string) (any, error) {
 
 	address := ht._hash(key)
 
@@ -54,18 +55,18 @@ func (ht HashTable) Get(key string) any {
 		currentBucket := ht.data[address].([]HashTableBucket)
 
 		if len(currentBucket) == 1 {
-			return currentBucket[0].val
+			return currentBucket[0].val, nil
 		}
 
 		for i := len(currentBucket) - 1; i >= 0; i-- {
 			if currentBucket[i].key == key {
-				return currentBucket[i].val
+				return currentBucket[i].val, nil
 			}
 		}
 
 	}
 
-	return nil
+	return nil, errors.New("no index found for this key")
 
 }
 

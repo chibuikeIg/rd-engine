@@ -10,17 +10,15 @@ import (
 )
 
 type Segment struct {
-	SegmentPaths string
 }
 
 func NewSegment() *Segment {
-	segmentsPath := "./storage"
-	return &Segment{segmentsPath}
+	return &Segment{}
 }
 
 func (s *Segment) Segments() ([]fs.FileInfo, error) {
 	// Reads storage directories
-	dirEntries, err := os.ReadDir(s.SegmentPaths)
+	dirEntries, err := os.ReadDir(config.SegmentStorageBasePath)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +66,7 @@ func (s *Segment) GetActiveSegmentID() (int, error) {
 
 func (s *Segment) CreateSegment(segmentID int) (*os.File, error) {
 	formatedSegmentID := "0" + strconv.Itoa(segmentID)
-	file := s.SegmentPaths + "/" + formatedSegmentID + ".data.txt"
+	file := config.SegmentStorageBasePath + "/" + formatedSegmentID + ".data.txt"
 	// Create a single instance of file
 	f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC, 0644)
 	return f, err

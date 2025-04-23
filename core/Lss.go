@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"errors"
 	"io"
 	"log"
 	"os"
+	"strconv"
 	"strings"
+
+	"reversed-database.engine/config"
 )
 
 // Log structured storage
@@ -16,6 +18,11 @@ type LSS struct {
 	Ht          *HashTable
 	File        *os.File
 	ActiveSegID int
+}
+
+type KeyDirValue struct {
+	FileId int
+	Offset int64
 }
 
 func NewLSS(ht *HashTable) *LSS {
@@ -49,7 +56,7 @@ func (lss *LSS) Set(key string, value any) (string, error) {
 	data := bytes.Join([][]byte{keyInByte, val}, []byte(","))
 	data = append(data, '\n')
 	if err != nil {
-		log.Fatal(err)
+		return key, err
 	}
 
 	if _, err := lss.File.Write(data); err != nil {
@@ -57,22 +64,32 @@ func (lss *LSS) Set(key string, value any) (string, error) {
 	}
 
 	// Set Index data
-	lss.Ht.Set(key, byteOffset)
+	lss.Ht.Set(key, KeyDirValue{lss.ActiveSegID, byteOffset})
 
 	return key, nil
 }
 
 func (lss *LSS) Get(key string) ([]byte, error) {
-	ioReader := bufio.NewReader(lss.File)
 
 	// Get value position from index
-	byteOffset := lss.Ht.Get(key)
-	if byteOffset == nil {
-		return nil, errors.New("no index found for this key")
+	val, err := lss.Ht.Get(key)
+	if err != nil {
+		return nil, err
 	}
 
+	indexVal := val.(KeyDirValue)
+	// Open file for reading
+	formatedSegmentID := "0" + strconv.Itoa(indexVal.FileId)
+	filePath := config.SegmentStorageBasePath + "/" + formatedSegmentID + ".data.txt"
+	f, err := os.Open(filePath)
+
+	if err != nil {
+		return nil, err
+	}
+	ioReader := bufio.NewReader(f)
+
 	// Set the position for the next read.
-	_, err := lss.File.Seek(byteOffset.(int64), io.SeekStart)
+	_, err = f.Seek(indexVal.Offset, io.SeekStart)
 	if err != nil {
 		return nil, err
 	}
