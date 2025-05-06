@@ -4,9 +4,9 @@ import (
 	"io/fs"
 	"os"
 	"strconv"
-	"strings"
 
 	"reversed-database.engine/config"
+	"reversed-database.engine/utilities"
 )
 
 type Segment struct {
@@ -50,9 +50,7 @@ func (s *Segment) GetActiveSegmentID() (int, error) {
 	if len(segments) > 0 {
 
 		activeFile := segments[len(segments)-1]
-		fName := activeFile.Name()
-		activeFNameSlice := strings.SplitN(fName, ".", 3)
-		segmentId, err := strconv.Atoi(activeFNameSlice[0])
+		segmentId, err := utilities.GetSegmentIdFromFname(activeFile.Name())
 		if err != nil {
 			return 0, err
 		}

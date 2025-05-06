@@ -25,7 +25,7 @@ type KeyDirValue struct {
 	Offset int64
 }
 
-func NewLSS(ht *HashTable) *LSS {
+func NewLSS() *LSS {
 
 	segment := NewSegment()
 	activeSegID, err := segment.GetActiveSegmentID()
@@ -39,7 +39,7 @@ func NewLSS(ht *HashTable) *LSS {
 		log.Fatalln(err)
 	}
 
-	return &LSS{ht, f, activeSegID}
+	return &LSS{File: f, ActiveSegID: activeSegID}
 }
 
 func (lss *LSS) Set(key string, value any) (string, error) {

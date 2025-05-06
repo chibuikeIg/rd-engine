@@ -11,12 +11,12 @@ type HashTableBucket struct {
 }
 
 type HashTable struct {
-	data []any
+	data [][]HashTableBucket
 }
 
 func NewHashTable(size int) *HashTable {
 
-	data := make([]any, size)
+	data := make([][]HashTableBucket, size)
 
 	return &HashTable{data}
 
@@ -42,7 +42,7 @@ func (ht HashTable) Set(key string, val any) {
 		ht.data[address] = []HashTableBucket{}
 	}
 
-	ht.data[address] = append(ht.data[address].([]HashTableBucket), HashTableBucket{key, val})
+	ht.data[address] = append(ht.data[address], HashTableBucket{key, val})
 
 }
 
@@ -52,7 +52,7 @@ func (ht HashTable) Get(key string) (any, error) {
 
 	if ht.data[address] != nil {
 
-		currentBucket := ht.data[address].([]HashTableBucket)
+		currentBucket := ht.data[address]
 
 		if len(currentBucket) == 1 {
 			return currentBucket[0].val, nil
@@ -81,7 +81,7 @@ func (ht HashTable) Keys() []string {
 
 	for _, buckets := range ht.data {
 
-		buckets := buckets.([]HashTableBucket)
+		buckets := buckets
 
 		if len(buckets) == 1 {
 

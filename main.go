@@ -11,14 +11,12 @@ import (
 
 	"reversed-database.engine/config"
 	"reversed-database.engine/core"
+	"reversed-database.engine/utilities"
 )
 
 var bufferedChannel = make(chan Data, 50)
 
 func main() {
-	hashTable := core.NewHashTable(50)
-
-	lss := core.NewLSS(hashTable)
 
 	l, err := net.Listen("tcp", "0.0.0.0:1379")
 	if err != nil {
@@ -26,7 +24,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Rebuilds HashTable
+	keyDirs := rebuildHashTable()
+	lss := core.NewLSS()
+	lss.Ht = keyDirs[lss.ActiveSegID-1]
+
 	go handleDataWrites(lss)
+	// go handleMerge(hashTable)
+
+	fmt.Println(*keyDirs[0])
 
 	for {
 
@@ -42,27 +48,6 @@ func main() {
 
 func readConn(conn net.Conn, lss *core.LSS) {
 	conn.Write([]byte("Connected\r\n"))
-	// Rebuild HashTable
-	ioReader := bufio.NewReader(lss.File)
-	offset := int64(0)
-	for {
-		// Read until newline ('\n')
-		line, err := ioReader.ReadBytes('\n')
-
-		trimmedData := string(bytes.TrimSuffix(line, []byte("\n")))
-
-		dataSlice := strings.SplitN(trimmedData, ",", 2)
-
-		if len(dataSlice) == 2 {
-			lss.Ht.Set(dataSlice[0], offset)
-			offset += int64(len(line))
-		}
-
-		if err != nil {
-			break
-		}
-
-	}
 
 	for {
 		bufReader := bufio.NewReader(conn)
@@ -133,6 +118,10 @@ func handleDataWrites(lss *core.LSS) {
 		if err != nil {
 			log.Fatal(err)
 		}
+
+		// Creates manifest file to trigger merge worker
+		// Write should continue even if it fails to create manifest
+		os.OpenFile("manifest.txt", os.O_CREATE, 0644)
 	}
 
 	for {
@@ -142,4 +131,77 @@ func handleDataWrites(lss *core.LSS) {
 			log.Fatal(err)
 		}
 	}
+}
+
+// func handleMerge(ht *core.HashTable) {
+// 	for {
+
+// 		_, err := os.Stat("manifest.txt")
+// 		if os.IsNotExist(err) {
+// 			continue
+// 		}
+
+// 		// Starts Merge process
+// 		fmt.Println("ht.Keys()")
+// 		fmt.Println(ht.Keys())
+// 	}
+// }
+
+func rebuildHashTable() []*core.HashTable {
+	// Reads storage directories
+	dirEntries, err := os.ReadDir(config.SegmentStorageBasePath)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	keyDirs := make([]*core.HashTable, len(dirEntries))
+
+	for _, de := range dirEntries {
+
+		if de.IsDir() {
+			continue
+		}
+
+		segmentInfo, err := de.Info()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		segment, err := os.Open(config.SegmentStorageBasePath + "/" + segmentInfo.Name())
+		if err != nil {
+			err = fmt.Errorf("unable to open segment, here is why: %s", err.Error())
+			log.Fatal(err)
+		}
+
+		segmentId, err := utilities.GetSegmentIdFromFname(segmentInfo.Name())
+		if err != nil {
+			err = fmt.Errorf("unable to get segment id from %s, here is why: %s", segment.Name(), err.Error())
+			log.Fatal(err)
+		}
+
+		// Instantiate Hashtable
+		i := segmentId - 1
+		keyDirs[i] = core.NewHashTable(50)
+
+		ioReader := bufio.NewReader(segment)
+		offset := int64(0)
+
+		for {
+			// Reads until newline ('\n')
+			line, err := ioReader.ReadBytes('\n')
+			trimmedData := string(bytes.TrimSuffix(line, []byte("\n")))
+			dataSlice := strings.SplitN(trimmedData, ",", 2)
+
+			if len(dataSlice) == 2 {
+				keyDirs[i].Set(dataSlice[0], core.KeyDirValue{FileId: segmentId, Offset: offset})
+				offset += int64(len(line))
+			}
+
+			if err != nil {
+				break
+			}
+		}
+	}
+
+	return keyDirs
 }
