@@ -196,7 +196,18 @@ func handleMerge(keyDirs []*core.HashTable, lss *core.LSS) {
 
 				// Writes back data to active segment
 				lss.Set(key, data)
+				// Delete Segment file
+				err = os.Remove(filePath)
+				if err != nil {
+					log.Fatalf("failed to remove segment %s after compaction", filePath)
+				}
 			}
+		}
+
+		// Delete Manifest file when compaction is complete
+		err = os.Remove("manifest.txt")
+		if err != nil {
+			log.Fatal("failed to remove manifest file after compaction")
 		}
 	}
 }
