@@ -103,12 +103,9 @@ func (lss *LSS) Get(key string) ([]byte, error) {
 		trimmedData := string(bytes.TrimSuffix(line, []byte("\n")))
 		dataSlice := strings.SplitN(trimmedData, ",", 2)
 
-		if len(dataSlice) == 2 {
-
-			if dataSlice[0] == key {
-				value = []byte(dataSlice[1])
-				break
-			}
+		if len(dataSlice) == 2 && dataSlice[0] == key {
+			value = []byte(dataSlice[1])
+			break
 		}
 
 		if err != nil {

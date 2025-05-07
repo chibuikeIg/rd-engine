@@ -1,3 +1,3 @@
 module reversed-database.engine
 
-go 1.19
+go 1.24

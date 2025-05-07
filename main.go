@@ -4,9 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
+	"slices"
+	"strconv"
 	"strings"
 
 	"reversed-database.engine/config"
@@ -30,9 +33,7 @@ func main() {
 	lss.Ht = keyDirs[lss.ActiveSegID-1]
 
 	go handleDataWrites(lss)
-	// go handleMerge(hashTable)
-
-	fmt.Println(*keyDirs[0])
+	go handleMerge(keyDirs, lss)
 
 	for {
 
@@ -133,19 +134,72 @@ func handleDataWrites(lss *core.LSS) {
 	}
 }
 
-// func handleMerge(ht *core.HashTable) {
-// 	for {
+func handleMerge(keyDirs []*core.HashTable, lss *core.LSS) {
+	for {
 
-// 		_, err := os.Stat("manifest.txt")
-// 		if os.IsNotExist(err) {
-// 			continue
-// 		}
+		_, err := os.Stat("manifest.txt")
+		if os.IsNotExist(err) {
+			continue
+		}
 
-// 		// Starts Merge process
-// 		fmt.Println("ht.Keys()")
-// 		fmt.Println(ht.Keys())
-// 	}
-// }
+		// Starts Merge process
+		keyDirs = keyDirs[:lss.ActiveSegID-1]
+		for _, keyDir := range keyDirs {
+			keyDirKeys := keyDir.Keys()
+
+			for _, key := range keyDirKeys {
+				// Checks key doesn't already exist in active segment
+				if slices.Contains(lss.Ht.Keys(), key) {
+					continue
+				}
+
+				val, err := keyDir.Get(key)
+				if err != nil {
+					continue
+				}
+
+				indexVal := val.(core.KeyDirValue)
+
+				// Converts SegmentID to string and Opens file for reading
+				segmentIdAsString := "0" + strconv.Itoa(indexVal.FileId)
+				filePath := config.SegmentStorageBasePath + "/" + segmentIdAsString + ".data.txt"
+				f, err := os.Open(filePath)
+
+				if err != nil {
+					continue
+				}
+
+				// Set the position for the next read.
+				_, err = f.Seek(indexVal.Offset, io.SeekStart)
+				if err != nil {
+					continue
+				}
+
+				ioReader := bufio.NewReader(f)
+				var data string
+
+				for {
+					// Reads until newline ('\n')
+					line, err := ioReader.ReadBytes('\n')
+
+					trimmedData := string(bytes.TrimSuffix(line, []byte("\n")))
+					dataSlice := strings.SplitN(trimmedData, ",", 2)
+					if len(dataSlice) == 2 && dataSlice[0] == key {
+						data = dataSlice[1]
+						break
+					}
+
+					if err != nil {
+						break
+					}
+				}
+
+				// Writes back data to active segment
+				lss.Set(key, data)
+			}
+		}
+	}
+}
 
 func rebuildHashTable() []*core.HashTable {
 	// Reads storage directories

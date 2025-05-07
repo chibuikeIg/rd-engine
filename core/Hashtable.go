@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"slices"
 	"unicode/utf8"
 )
 
@@ -81,8 +82,6 @@ func (ht HashTable) Keys() []string {
 
 	for _, buckets := range ht.data {
 
-		buckets := buckets
-
 		if len(buckets) == 1 {
 
 			foundKeys = append(foundKeys, buckets[0].key)
@@ -90,9 +89,9 @@ func (ht HashTable) Keys() []string {
 		} else {
 
 			for _, bucket := range buckets {
-
-				foundKeys = append(foundKeys, bucket.key)
-
+				if !slices.Contains(foundKeys, bucket.key) {
+					foundKeys = append(foundKeys, bucket.key)
+				}
 			}
 
 		}
