@@ -219,6 +219,7 @@ func rebuildHashTable() []*core.HashTable {
 		log.Fatal(err)
 	}
 
+	// TODO: Properly create slice length. The below is inefficient
 	keyDirs := make([]*core.HashTable, len(dirEntries))
 
 	for _, de := range dirEntries {
