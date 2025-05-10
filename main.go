@@ -150,7 +150,7 @@ func handleMerge(lss *core.LSS) {
 		activeKeyDir := lss.KeyDirs[index]
 		keyDirs := lss.KeyDirs[:index]
 
-		for i := len(keyDirs); i >= 0; i-- {
+		for i := len(keyDirs) - 1; i >= 0; i-- {
 
 			keyDirKeys := keyDirs[i].Keys()
 

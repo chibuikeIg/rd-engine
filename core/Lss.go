@@ -40,8 +40,12 @@ func NewLSS() *LSS {
 
 	// Trigger compaction
 	// Creates manifest file to trigger compaction
-	if segments, err := segment.Segments(); err == nil && len(segments) > 1 {
-		os.OpenFile(config.Manifest, os.O_CREATE, 0644)
+	segments, err := segment.Segments()
+	if err == nil && len(segments) > 1 {
+		_, err := os.Stat(config.Manifest)
+		if os.IsNotExist(err) {
+			os.OpenFile(config.Manifest, os.O_CREATE, 0644)
+		}
 	}
 
 	return &LSS{File: f, ActiveSegID: activeSegID}
