@@ -75,10 +75,10 @@ func (lss *LSS) Set(key string, value any) (string, error) {
 }
 
 func (lss *LSS) Get(key string) ([]byte, error) {
-
 	var value []byte
 
-	for i := len(lss.KeyDirs); i >= 0; i-- {
+	for i := len(lss.KeyDirs) - 1; i >= 0; i-- {
+
 		// Get value position from index
 		val, err := lss.KeyDirs[i].Get(key)
 		if err != nil {

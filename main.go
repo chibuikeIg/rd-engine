@@ -29,8 +29,7 @@ func main() {
 
 	// Rebuilds HashTable
 	lss := core.NewLSS()
-	keyDirs := rebuildHashTable()
-	lss.KeyDirs = keyDirs
+	lss.KeyDirs = rebuildHashTable()
 
 	go handleDataWrites(lss)
 	go handleMerge(lss)
@@ -264,12 +263,12 @@ func rebuildHashTable() []*core.HashTable {
 				segKeyDir.Set(dataSlice[0], core.KeyDirValue{FileId: segmentID, Offset: offset})
 				offset += int64(len(line))
 			}
-			keyDirs = append(keyDirs, segKeyDir)
 
 			if err != nil {
 				break
 			}
 		}
+		keyDirs = append(keyDirs, segKeyDir)
 	}
 
 	return keyDirs
