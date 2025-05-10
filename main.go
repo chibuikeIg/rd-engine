@@ -9,8 +9,8 @@ import (
 	"net"
 	"os"
 	"slices"
-	"strconv"
 	"strings"
+	"time"
 
 	"reversed-database.engine/config"
 	"reversed-database.engine/core"
@@ -28,12 +28,12 @@ func main() {
 	}
 
 	// Rebuilds HashTable
-	keyDirs := rebuildHashTable()
 	lss := core.NewLSS()
-	lss.Ht = keyDirs[lss.ActiveSegID-1]
+	keyDirs := rebuildHashTable()
+	lss.KeyDirs = keyDirs
 
 	go handleDataWrites(lss)
-	go handleMerge(keyDirs, lss)
+	go handleMerge(lss)
 
 	for {
 
@@ -77,7 +77,6 @@ func readConn(conn net.Conn, lss *core.LSS) {
 				bufferedChannel <- Data{
 					Key:         commands[1],
 					Value:       strings.Trim(commands[2], "\b"),
-					HashTable:   lss.Ht,
 					StorageFile: lss.File,
 				}
 			}
@@ -100,70 +99,80 @@ func readConn(conn net.Conn, lss *core.LSS) {
 
 // Handle write serialization
 func handleDataWrites(lss *core.LSS) {
-	defer lss.File.Close()
-
-	// Checks file size and creates new segment
-	// if full
-	fInfo, err := lss.File.Stat()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if fInfo.Size() >= config.MFS {
-		if err != nil {
-			log.Fatal(err)
-		}
-		lss.ActiveSegID += 1
-		segment := core.NewSegment()
-		lss.File, err = segment.CreateSegment(lss.ActiveSegID)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		// Creates manifest file to trigger merge worker
-		// Write should continue even if it fails to create manifest
-		os.OpenFile("manifest.txt", os.O_CREATE, 0644)
-	}
-
 	for {
+		// Checks file size and creates new segment
+		// if full
+		fInfo, err := lss.File.Stat()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		if fInfo.Size() >= config.MFS {
+			if err != nil {
+				log.Fatal(err)
+			}
+			lss.ActiveSegID += 1
+			segment := core.NewSegment()
+			lss.File, err = segment.CreateSegment(lss.ActiveSegID, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC)
+			if err != nil {
+				log.Fatal(err)
+			}
+			lss.KeyDirs = append(lss.KeyDirs, core.NewHashTable(50))
+
+			// Creates manifest file to trigger merge worker
+			// Write should continue even if it fails to create manifest
+			_, err := os.Stat(config.Manifest)
+			if os.IsNotExist(err) {
+				os.OpenFile(config.Manifest, os.O_CREATE, 0644)
+			}
+		}
+
 		data := <-bufferedChannel
-		_, err := lss.Set(data.Key, data.Value)
+		_, err = lss.Set(data.Key, data.Value)
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
 }
 
-func handleMerge(keyDirs []*core.HashTable, lss *core.LSS) {
+func handleMerge(lss *core.LSS) {
 	for {
 
-		_, err := os.Stat("manifest.txt")
+		// Wait for 3secs before checking for manifest file
+		time.Sleep(5 * time.Second)
+
+		_, err := os.Stat(config.Manifest)
 		if os.IsNotExist(err) {
 			continue
 		}
 
 		// Starts Merge process
-		keyDirs = keyDirs[:lss.ActiveSegID-1]
-		for _, keyDir := range keyDirs {
-			keyDirKeys := keyDir.Keys()
+		index := len(lss.KeyDirs) - 1
+		activeKeyDir := lss.KeyDirs[index]
+		keyDirs := lss.KeyDirs[:index]
+
+		for i := len(keyDirs); i >= 0; i-- {
+
+			keyDirKeys := keyDirs[i].Keys()
 
 			for _, key := range keyDirKeys {
 				// Checks key doesn't already exist in active segment
-				if slices.Contains(lss.Ht.Keys(), key) {
+				if slices.Contains(activeKeyDir.Keys(), key) {
 					continue
 				}
 
-				val, err := keyDir.Get(key)
+				val, err := keyDirs[i].Get(key)
 				if err != nil {
 					continue
 				}
 
 				indexVal := val.(core.KeyDirValue)
 
-				// Converts SegmentID to string and Opens file for reading
-				segmentIdAsString := "0" + strconv.Itoa(indexVal.FileId)
-				filePath := config.SegmentStorageBasePath + "/" + segmentIdAsString + ".data.txt"
-				f, err := os.Open(filePath)
+				segment := core.NewSegment()
+				f, err := segment.CreateSegment(indexVal.FileId, os.O_RDWR)
+				if err != nil {
+					log.Fatal(err)
+				}
 
 				if err != nil {
 					continue
@@ -197,15 +206,16 @@ func handleMerge(keyDirs []*core.HashTable, lss *core.LSS) {
 				// Writes back data to active segment
 				lss.Set(key, data)
 				// Delete Segment file
+				filePath := config.SegmentStorageBasePath + "/" + f.Name()
 				err = os.Remove(filePath)
 				if err != nil {
 					log.Fatalf("failed to remove segment %s after compaction", filePath)
 				}
 			}
-		}
 
+		}
 		// Delete Manifest file when compaction is complete
-		err = os.Remove("manifest.txt")
+		err = os.Remove(config.Manifest)
 		if err != nil {
 			log.Fatal("failed to remove manifest file after compaction")
 		}
@@ -213,43 +223,35 @@ func handleMerge(keyDirs []*core.HashTable, lss *core.LSS) {
 }
 
 func rebuildHashTable() []*core.HashTable {
-	// Reads storage directories
+
 	dirEntries, err := os.ReadDir(config.SegmentStorageBasePath)
+
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// TODO: Properly create slice length. The below is inefficient
-	keyDirs := make([]*core.HashTable, len(dirEntries))
+	keyDirs := []*core.HashTable{}
+	segment := core.NewSegment()
 
-	for _, de := range dirEntries {
+	for _, seg := range dirEntries {
 
-		if de.IsDir() {
+		if seg.IsDir() {
 			continue
 		}
 
-		segmentInfo, err := de.Info()
+		segmentID, err := utilities.GetSegmentIdFromFname(seg.Name())
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		segment, err := os.Open(config.SegmentStorageBasePath + "/" + segmentInfo.Name())
+		segmentF, err := segment.CreateSegment(segmentID, os.O_RDWR)
 		if err != nil {
-			err = fmt.Errorf("unable to open segment, here is why: %s", err.Error())
-			log.Fatal(err)
-		}
-
-		segmentId, err := utilities.GetSegmentIdFromFname(segmentInfo.Name())
-		if err != nil {
-			err = fmt.Errorf("unable to get segment id from %s, here is why: %s", segment.Name(), err.Error())
 			log.Fatal(err)
 		}
 
 		// Instantiate Hashtable
-		i := segmentId - 1
-		keyDirs[i] = core.NewHashTable(50)
-
-		ioReader := bufio.NewReader(segment)
+		segKeyDir := core.NewHashTable(50)
+		ioReader := bufio.NewReader(segmentF)
 		offset := int64(0)
 
 		for {
@@ -259,9 +261,10 @@ func rebuildHashTable() []*core.HashTable {
 			dataSlice := strings.SplitN(trimmedData, ",", 2)
 
 			if len(dataSlice) == 2 {
-				keyDirs[i].Set(dataSlice[0], core.KeyDirValue{FileId: segmentId, Offset: offset})
+				segKeyDir.Set(dataSlice[0], core.KeyDirValue{FileId: segmentID, Offset: offset})
 				offset += int64(len(line))
 			}
+			keyDirs = append(keyDirs, segKeyDir)
 
 			if err != nil {
 				break

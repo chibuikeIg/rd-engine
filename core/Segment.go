@@ -6,7 +6,6 @@ import (
 	"strconv"
 
 	"reversed-database.engine/config"
-	"reversed-database.engine/utilities"
 )
 
 type Segment struct {
@@ -40,20 +39,16 @@ func (s *Segment) Segments() ([]fs.FileInfo, error) {
 
 func (s *Segment) GetActiveSegmentID() (int, error) {
 
-	segmentId := 1
 	segments, err := s.Segments()
-
 	if err != nil {
-		return 0, err
+		return 1, err
 	}
 
-	if len(segments) > 0 {
+	segmentId := 1
 
-		activeFile := segments[len(segments)-1]
-		segmentId, err := utilities.GetSegmentIdFromFname(activeFile.Name())
-		if err != nil {
-			return 0, err
-		}
+	if len(segments) > 0 {
+		segmentId = len(segments)
+		activeFile := segments[segmentId-1]
 		if activeFile.Size() >= config.MFS {
 			segmentId += 1
 		}
@@ -62,10 +57,10 @@ func (s *Segment) GetActiveSegmentID() (int, error) {
 	return segmentId, nil
 }
 
-func (s *Segment) CreateSegment(segmentID int) (*os.File, error) {
+func (s *Segment) CreateSegment(segmentID int, flag int) (*os.File, error) {
 	formatedSegmentID := "0" + strconv.Itoa(segmentID)
 	file := config.SegmentStorageBasePath + "/" + formatedSegmentID + ".data.txt"
 	// Create a single instance of file
-	f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC, 0644)
+	f, err := os.OpenFile(file, flag, 0644)
 	return f, err
 }

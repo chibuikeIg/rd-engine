@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"strconv"
 	"strings"
 
 	"reversed-database.engine/config"
@@ -15,9 +14,9 @@ import (
 
 // Log structured storage
 type LSS struct {
-	Ht          *HashTable
 	File        *os.File
 	ActiveSegID int
+	KeyDirs     []*HashTable
 }
 
 type KeyDirValue struct {
@@ -33,10 +32,16 @@ func NewLSS() *LSS {
 		log.Fatal(err)
 	}
 
-	f, err := segment.CreateSegment(activeSegID)
+	f, err := segment.CreateSegment(activeSegID, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC)
 
 	if err != nil {
 		log.Fatalln(err)
+	}
+
+	// Trigger compaction
+	// Creates manifest file to trigger compaction
+	if segments, err := segment.Segments(); err == nil && len(segments) > 1 {
+		os.OpenFile(config.Manifest, os.O_CREATE, 0644)
 	}
 
 	return &LSS{File: f, ActiveSegID: activeSegID}
@@ -64,52 +69,59 @@ func (lss *LSS) Set(key string, value any) (string, error) {
 	}
 
 	// Set Index data
-	lss.Ht.Set(key, KeyDirValue{lss.ActiveSegID, byteOffset})
+	lss.KeyDirs[len(lss.KeyDirs)-1].Set(key, KeyDirValue{lss.ActiveSegID, byteOffset})
 
 	return key, nil
 }
 
 func (lss *LSS) Get(key string) ([]byte, error) {
 
-	// Get value position from index
-	val, err := lss.Ht.Get(key)
-	if err != nil {
-		return nil, err
-	}
-
-	indexVal := val.(KeyDirValue)
-	// Open file for reading
-	formatedSegmentID := "0" + strconv.Itoa(indexVal.FileId)
-	filePath := config.SegmentStorageBasePath + "/" + formatedSegmentID + ".data.txt"
-	f, err := os.Open(filePath)
-
-	if err != nil {
-		return nil, err
-	}
-	ioReader := bufio.NewReader(f)
-
-	// Set the position for the next read.
-	_, err = f.Seek(indexVal.Offset, io.SeekStart)
-	if err != nil {
-		return nil, err
-	}
-
 	var value []byte
 
-	for {
-		// Read until newline ('\n')
-		line, err := ioReader.ReadBytes('\n')
-
-		trimmedData := string(bytes.TrimSuffix(line, []byte("\n")))
-		dataSlice := strings.SplitN(trimmedData, ",", 2)
-
-		if len(dataSlice) == 2 && dataSlice[0] == key {
-			value = []byte(dataSlice[1])
-			break
+	for i := len(lss.KeyDirs); i >= 0; i-- {
+		// Get value position from index
+		val, err := lss.KeyDirs[i].Get(key)
+		if err != nil {
+			continue
 		}
+
+		indexVal := val.(KeyDirValue)
+
+		// Open file for reading
+		segment := NewSegment()
+		f, err := segment.CreateSegment(indexVal.FileId, os.O_RDONLY)
 
 		if err != nil {
 			return nil, err
+		}
+
+		ioReader := bufio.NewReader(f)
+
+		// Set the position for the next read.
+		_, err = f.Seek(indexVal.Offset, io.SeekStart)
+		if err != nil {
+			return nil, err
+		}
+
+		for {
+			// Read until newline ('\n')
+			line, err := ioReader.ReadBytes('\n')
+
+			trimmedData := string(bytes.TrimSuffix(line, []byte("\n")))
+			dataSlice := strings.SplitN(trimmedData, ",", 2)
+
+			if len(dataSlice) == 2 && dataSlice[0] == key {
+				value = []byte(dataSlice[1])
+				break
+			}
+
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		if len(value) != 0 {
+			break
 		}
 	}
 
