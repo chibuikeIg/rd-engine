@@ -19,11 +19,6 @@ type LSS struct {
 	KeyDirs     []*HashTable
 }
 
-type KeyDirValue struct {
-	FileId int
-	Offset int64
-}
-
 func NewLSS() *LSS {
 
 	segment := NewSegment()

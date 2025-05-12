@@ -17,7 +17,7 @@ import (
 	"reversed-database.engine/utilities"
 )
 
-var bufferedChannel = make(chan Data, 50)
+var writeReqests = make(chan core.WriteRequest, 50)
 
 func main() {
 
@@ -32,14 +32,14 @@ func main() {
 	lss.KeyDirs = rebuildHashTable()
 
 	go handleDataWrites(lss)
-	go handleMerge(lss)
+	// go handleMerge(lss)
 
 	for {
 
 		conn, err := l.Accept()
 		if err != nil {
 			fmt.Println("Error accepting connection: ", err.Error())
-			os.Exit(1)
+			continue
 		}
 
 		go readConn(conn, lss)
@@ -55,7 +55,8 @@ func readConn(conn net.Conn, lss *core.LSS) {
 		for {
 			cmd, err := bufReader.ReadBytes('\n')
 			if err != nil {
-				log.Fatal("unable to read connection")
+				log.Println("unable to read connection")
+				return
 			}
 
 			cmd = bytes.TrimSuffix(cmd, []byte("\n"))
@@ -73,7 +74,7 @@ func readConn(conn net.Conn, lss *core.LSS) {
 			}
 
 			if len(commands) == 3 && commands[0] == "set" {
-				bufferedChannel <- Data{
+				writeReqests <- core.WriteRequest{
 					Key:         commands[1],
 					Value:       strings.Trim(commands[2], "\b"),
 					StorageFile: lss.File,
@@ -107,9 +108,6 @@ func handleDataWrites(lss *core.LSS) {
 		}
 
 		if fInfo.Size() >= config.MFS {
-			if err != nil {
-				log.Fatal(err)
-			}
 			lss.ActiveSegID += 1
 			segment := core.NewSegment()
 			lss.File, err = segment.CreateSegment(lss.ActiveSegID, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC)
@@ -126,10 +124,11 @@ func handleDataWrites(lss *core.LSS) {
 			}
 		}
 
-		data := <-bufferedChannel
+		data := <-writeReqests
 		_, err = lss.Set(data.Key, data.Value)
 		if err != nil {
-			log.Fatal(err)
+			log.Printf("failed to write data. Here is why: %s", err)
+			continue
 		}
 	}
 }
@@ -201,22 +200,23 @@ func handleMerge(lss *core.LSS) {
 						break
 					}
 				}
-
 				// Writes back data to active segment
 				lss.Set(key, data)
-				// Delete Segment file
-				filePath := config.SegmentStorageBasePath + "/" + f.Name()
-				err = os.Remove(filePath)
-				if err != nil {
-					log.Fatalf("failed to remove segment %s after compaction", filePath)
-				}
 			}
+
+			// Delete Segment file
+			// filePath := config.SegmentStorageBasePath + "/" + f.Name()
+			// err = os.Remove(filePath)
+			// if err != nil {
+			// 	log.Fatalf("failed to remove segment %s after compaction", filePath)
+			// }
 
 		}
 		// Delete Manifest file when compaction is complete
 		err = os.Remove(config.Manifest)
 		if err != nil {
-			log.Fatal("failed to remove manifest file after compaction")
+			log.Println("failed to remove manifest file after compaction")
+			continue
 		}
 	}
 }
