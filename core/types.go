@@ -4,9 +4,14 @@ import (
 	"os"
 )
 
-type KeyDirValue struct {
+type IndexValue struct {
 	FileId int
 	Offset int64
+}
+
+type KeyDir struct {
+	SegmentID int
+	HashTable *HashTable
 }
 
 type WriteRequest struct {

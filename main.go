@@ -17,7 +17,7 @@ import (
 	"reversed-database.engine/utilities"
 )
 
-var writeReqests = make(chan core.WriteRequest, 50)
+var writeReqests = make(chan core.WriteRequest, config.WriteRequestBufferSize)
 
 func main() {
 
@@ -32,7 +32,7 @@ func main() {
 	lss.KeyDirs = rebuildHashTable()
 
 	go handleDataWrites(lss)
-	// go handleMerge(lss)
+	go handleMerge(lss)
 
 	for {
 
@@ -114,7 +114,7 @@ func handleDataWrites(lss *core.LSS) {
 			if err != nil {
 				log.Fatal(err)
 			}
-			lss.KeyDirs = append(lss.KeyDirs, core.NewHashTable(50))
+			lss.KeyDirs = append(lss.KeyDirs, core.KeyDir{SegmentID: lss.ActiveSegID, HashTable: core.NewHashTable(config.HashTableSize)})
 
 			// Creates manifest file to trigger merge worker
 			// Write should continue even if it fails to create manifest
@@ -144,43 +144,36 @@ func handleMerge(lss *core.LSS) {
 			continue
 		}
 
-		// Starts Merge process
 		index := len(lss.KeyDirs) - 1
 		activeKeyDir := lss.KeyDirs[index]
 		keyDirs := lss.KeyDirs[:index]
-
+		// Starts Merge process
 		for i := len(keyDirs) - 1; i >= 0; i-- {
 
-			keyDirKeys := keyDirs[i].Keys()
+			keyDirKeys := keyDirs[i].HashTable.Keys()
+
+			segment := core.NewSegment()
+			f, err := segment.CreateSegment(keyDirs[i].SegmentID, os.O_RDWR)
+			if err != nil {
+				log.Printf("unable to open segment. Here is why: %s", err)
+				continue
+			}
 
 			for _, key := range keyDirKeys {
 				// Checks key doesn't already exist in active segment
-				if slices.Contains(activeKeyDir.Keys(), key) {
+				if slices.Contains(activeKeyDir.HashTable.Keys(), key) {
 					continue
 				}
 
-				val, err := keyDirs[i].Get(key)
+				val, err := keyDirs[i].HashTable.Get(key)
 				if err != nil {
 					continue
 				}
 
-				indexVal := val.(core.KeyDirValue)
-
-				segment := core.NewSegment()
-				f, err := segment.CreateSegment(indexVal.FileId, os.O_RDWR)
-				if err != nil {
-					log.Fatal(err)
-				}
-
-				if err != nil {
-					continue
-				}
+				indexVal := val.(core.IndexValue)
 
 				// Set the position for the next read.
-				_, err = f.Seek(indexVal.Offset, io.SeekStart)
-				if err != nil {
-					continue
-				}
+				f.Seek(indexVal.Offset, io.SeekStart)
 
 				ioReader := bufio.NewReader(f)
 				var data string
@@ -200,17 +193,21 @@ func handleMerge(lss *core.LSS) {
 						break
 					}
 				}
+
 				// Writes back data to active segment
-				lss.Set(key, data)
+				writeReqests <- core.WriteRequest{
+					Key:         key,
+					Value:       data,
+					StorageFile: lss.File,
+				}
 			}
 
 			// Delete Segment file
-			// filePath := config.SegmentStorageBasePath + "/" + f.Name()
-			// err = os.Remove(filePath)
-			// if err != nil {
-			// 	log.Fatalf("failed to remove segment %s after compaction", filePath)
-			// }
-
+			filePath := config.SegmentStorageBasePath + "/" + f.Name()
+			err = os.Remove(filePath)
+			if err != nil {
+				log.Fatalf("failed to remove segment %s after compaction", filePath)
+			}
 		}
 		// Delete Manifest file when compaction is complete
 		err = os.Remove(config.Manifest)
@@ -221,7 +218,7 @@ func handleMerge(lss *core.LSS) {
 	}
 }
 
-func rebuildHashTable() []*core.HashTable {
+func rebuildHashTable() []core.KeyDir {
 
 	dirEntries, err := os.ReadDir(config.SegmentStorageBasePath)
 
@@ -229,7 +226,7 @@ func rebuildHashTable() []*core.HashTable {
 		log.Fatal(err)
 	}
 
-	keyDirs := []*core.HashTable{}
+	keyDirs := []core.KeyDir{}
 	segment := core.NewSegment()
 
 	for _, seg := range dirEntries {
@@ -249,7 +246,7 @@ func rebuildHashTable() []*core.HashTable {
 		}
 
 		// Instantiate Hashtable
-		segKeyDir := core.NewHashTable(50)
+		keyDirHashTable := core.NewHashTable(config.HashTableSize)
 		ioReader := bufio.NewReader(segmentF)
 		offset := int64(0)
 
@@ -260,7 +257,7 @@ func rebuildHashTable() []*core.HashTable {
 			dataSlice := strings.SplitN(trimmedData, ",", 2)
 
 			if len(dataSlice) == 2 {
-				segKeyDir.Set(dataSlice[0], core.KeyDirValue{FileId: segmentID, Offset: offset})
+				keyDirHashTable.Set(dataSlice[0], core.IndexValue{FileId: segmentID, Offset: offset})
 				offset += int64(len(line))
 			}
 
@@ -268,7 +265,7 @@ func rebuildHashTable() []*core.HashTable {
 				break
 			}
 		}
-		keyDirs = append(keyDirs, segKeyDir)
+		keyDirs = append(keyDirs, core.KeyDir{SegmentID: segmentID, HashTable: keyDirHashTable})
 	}
 
 	return keyDirs
