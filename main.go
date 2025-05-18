@@ -8,7 +8,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -19,6 +18,7 @@ import (
 )
 
 var writeReqests = make(chan core.WriteRequest, config.WriteRequestBufferSize)
+var toDeleteSegmentQueue = make(chan string, config.ToDeleteSegmentBufferSize)
 
 func main() {
 
@@ -34,6 +34,7 @@ func main() {
 
 	go handleDataWrites(lss)
 	go handleMerge(lss)
+	go deleteSegments()
 
 	for {
 
@@ -123,7 +124,6 @@ func handleDataWrites(lss *core.LSS) {
 
 		if fInfo.Size() >= config.MFS {
 			lss.ActiveSegID += 1
-			lss.File.Close()
 			segment := core.NewSegment()
 			lss.File, err = segment.CreateSegment(lss.ActiveSegID, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC)
 			if err != nil {
@@ -165,7 +165,6 @@ func handleMerge(lss *core.LSS) {
 		keyDirs := lss.KeyDirs[:index]
 		// Starts Merge process
 		for i := len(keyDirs) - 1; i >= 0; i-- {
-
 			keyDirKeys := keyDirs[i].HashTable.Keys()
 
 			segment := core.NewSegment()
@@ -190,8 +189,8 @@ func handleMerge(lss *core.LSS) {
 
 				// Set the position for the next read.
 				f.Seek(indexVal.Offset, io.SeekStart)
-
 				ioReader := bufio.NewReader(f)
+
 				var data string
 
 				for {
@@ -228,16 +227,8 @@ func handleMerge(lss *core.LSS) {
 				log.Printf("failed to close file %s: %v", f.Name(), err)
 			}
 
-			// Delete Segment file
-			runtime.GC() // Temporary fix for files not being removed due other processes hanging on after closing
-
-			// TODO: Isolate file removal and delay for some minute before removal
-			filePath := f.Name()
-			err = os.Remove(filePath)
-			if err != nil {
-				log.Printf("failed to remove segment %s after compaction, here's why %s", filePath, err)
-				continue
-			}
+			// Queue Segment file for deletion
+			toDeleteSegmentQueue <- f.Name()
 		}
 
 		lss.KeyDirs = append(keyDirs, activeKeyDir)
@@ -299,7 +290,21 @@ func rebuildHashTable() []core.KeyDir {
 			}
 		}
 		keyDirs = append(keyDirs, core.KeyDir{SegmentID: segmentID, HashTable: keyDirHashTable})
+		segmentF.Close()
 	}
 
 	return keyDirs
+}
+
+func deleteSegments() {
+	for segment := range toDeleteSegmentQueue {
+		// Wait for 3secs before checking for manifest file
+		time.Sleep(60 * time.Second)
+
+		err := os.Remove(segment)
+		if err != nil {
+			log.Printf("failed to remove segment %s after compaction, here's why %s", segment, err)
+			continue
+		}
+	}
 }
