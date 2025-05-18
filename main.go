@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -100,35 +101,41 @@ func readConn(conn net.Conn, lss *core.LSS) {
 // Handle write serialization
 func handleDataWrites(lss *core.LSS) {
 	for {
-		// Checks file size and creates new segment
-		// if full
-		fInfo, err := lss.File.Stat()
-		if err != nil {
-			log.Fatal(err)
-		}
 
-		if fInfo.Size() >= config.MFS {
-			lss.ActiveSegID += 1
-			segment := core.NewSegment()
-			lss.File, err = segment.CreateSegment(lss.ActiveSegID, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC)
+		data, ok := <-writeReqests
+
+		if ok {
+			// Checks file size and creates new segment
+			// if full
+			fInfo, err := lss.File.Stat()
 			if err != nil {
 				log.Fatal(err)
 			}
-			lss.KeyDirs = append(lss.KeyDirs, core.KeyDir{SegmentID: lss.ActiveSegID, HashTable: core.NewHashTable(config.HashTableSize)})
 
-			// Creates manifest file to trigger merge worker
-			// Write should continue even if it fails to create manifest
-			_, err := os.Stat(config.Manifest)
-			if os.IsNotExist(err) {
-				os.OpenFile(config.Manifest, os.O_CREATE, 0644)
+			if fInfo.Size() >= config.MFS {
+				lss.ActiveSegID += 1
+				lss.File.Close()
+				segment := core.NewSegment()
+				lss.File, err = segment.CreateSegment(lss.ActiveSegID, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC)
+				if err != nil {
+					log.Fatal(err)
+				}
+				lss.KeyDirs = append(lss.KeyDirs, core.KeyDir{SegmentID: lss.ActiveSegID, HashTable: core.NewHashTable(config.HashTableSize)})
+
+				// Creates manifest file to trigger merge worker
+				// Write should continue even if it fails to create manifest
+				_, err := os.Stat(config.Manifest)
+				if os.IsNotExist(err) {
+					f, _ := os.OpenFile(config.Manifest, os.O_CREATE, 0644)
+					f.Close()
+				}
 			}
-		}
 
-		data := <-writeReqests
-		_, err = lss.Set(data.Key, data.Value)
-		if err != nil {
-			log.Printf("failed to write data. Here is why: %s", err)
-			continue
+			_, err = lss.Set(data.Key, data.Value)
+			if err != nil {
+				log.Printf("failed to write data. Here is why: %s", err)
+				continue
+			}
 		}
 	}
 }
@@ -185,7 +192,8 @@ func handleMerge(lss *core.LSS) {
 					trimmedData := string(bytes.TrimSuffix(line, []byte("\n")))
 					dataSlice := strings.SplitN(trimmedData, ",", 2)
 					if len(dataSlice) == 2 && dataSlice[0] == key {
-						data = dataSlice[1]
+						trimmed := strings.Trim(dataSlice[1], "\r")
+						data = strings.Trim(trimmed, "\"")
 						break
 					}
 
@@ -202,17 +210,28 @@ func handleMerge(lss *core.LSS) {
 				}
 			}
 
+			keyDirs = keyDirs[:i]
+
+			if err := f.Close(); err != nil {
+				log.Printf("failed to close file %s: %v", f.Name(), err)
+			}
+
 			// Delete Segment file
-			filePath := config.SegmentStorageBasePath + "/" + f.Name()
+			runtime.GC() // Temporary fix for files not being removed due other processes hanging on after closing
+			filePath := f.Name()
 			err = os.Remove(filePath)
 			if err != nil {
-				log.Fatalf("failed to remove segment %s after compaction", filePath)
+				log.Printf("failed to remove segment %s after compaction, here's why %s", filePath, err)
+				continue
 			}
 		}
+
+		lss.KeyDirs = append(keyDirs, activeKeyDir)
+
 		// Delete Manifest file when compaction is complete
 		err = os.Remove(config.Manifest)
 		if err != nil {
-			log.Println("failed to remove manifest file after compaction")
+			log.Printf("failed to remove manifest file after compaction %s", err)
 			continue
 		}
 	}

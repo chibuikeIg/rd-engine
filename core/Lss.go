@@ -26,7 +26,6 @@ func NewLSS() *LSS {
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	f, err := segment.CreateSegment(activeSegID, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC)
 
 	if err != nil {
@@ -57,11 +56,11 @@ func (lss *LSS) Set(key string, value any) (string, error) {
 	// Convert data to bytes and combine both
 	keyInByte := []byte(key)
 	val, err := json.Marshal(value)
-	data := bytes.Join([][]byte{keyInByte, val}, []byte(","))
-	data = append(data, '\n')
 	if err != nil {
 		return key, err
 	}
+	data := bytes.Join([][]byte{keyInByte, val}, []byte(","))
+	data = append(data, '\n')
 
 	if _, err := lss.File.Write(data); err != nil {
 		return key, err

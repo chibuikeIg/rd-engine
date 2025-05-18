@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"reversed-database.engine/config"
+	"reversed-database.engine/utilities"
 )
 
 type Segment struct {
@@ -47,8 +48,9 @@ func (s *Segment) GetActiveSegmentID() (int, error) {
 	segmentId := 1
 
 	if len(segments) > 0 {
-		segmentId = len(segments)
-		activeFile := segments[segmentId-1]
+		segmentLen := len(segments)
+		activeFile := segments[segmentLen-1]
+		segmentId, _ = utilities.GetSegmentIdFromFname(activeFile.Name())
 		if activeFile.Size() >= config.MFS {
 			segmentId += 1
 		}
@@ -58,7 +60,11 @@ func (s *Segment) GetActiveSegmentID() (int, error) {
 }
 
 func (s *Segment) CreateSegment(segmentID int, flag int) (*os.File, error) {
-	formatedSegmentID := "0" + strconv.Itoa(segmentID)
+	formatedSegmentID := strconv.Itoa(segmentID)
+	if segmentID < 10 {
+		formatedSegmentID = "0" + formatedSegmentID
+	}
+
 	file := config.SegmentStorageBasePath + "/" + formatedSegmentID + ".data.txt"
 	// Create a single instance of file
 	f, err := os.OpenFile(file, flag, 0644)
