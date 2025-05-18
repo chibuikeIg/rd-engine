@@ -70,7 +70,7 @@ func readConn(conn net.Conn, lss *core.LSS) {
 				conn.Write([]byte("no valid commands provided\r\n"))
 			}
 
-			if commands[0] != "set" && commands[0] != "get" {
+			if commands[0] != "set" && commands[0] != "get" && commands[0] != "delete" {
 				conn.Write([]byte("no valid commands provided\r\n"))
 			}
 
@@ -84,14 +84,26 @@ func readConn(conn net.Conn, lss *core.LSS) {
 
 			if len(commands) == 2 && commands[0] == "get" {
 				result, err := lss.Get(commands[1])
+				result = bytes.Trim(result, "\"")
 				if err != nil {
 					result = []byte(err.Error())
-				} else if result == nil {
+				} else if len(result) == 0 {
 					result = []byte("no record found")
 				}
 
 				result = append(result, '\r', '\n')
 				conn.Write(result)
+			}
+
+			if len(commands) == 2 && commands[0] == "delete" {
+
+				writeReqests <- core.WriteRequest{
+					Key:         commands[1],
+					Value:       "",
+					StorageFile: lss.File,
+				}
+
+				conn.Write([]byte("deleted record"))
 			}
 
 		}
@@ -100,43 +112,40 @@ func readConn(conn net.Conn, lss *core.LSS) {
 
 // Handle write serialization
 func handleDataWrites(lss *core.LSS) {
-	for {
 
-		data, ok := <-writeReqests
+	for data := range writeReqests {
+		// Checks file size and creates new segment
+		// if full
+		fInfo, err := lss.File.Stat()
+		if err != nil {
+			log.Fatal(err)
+		}
 
-		if ok {
-			// Checks file size and creates new segment
-			// if full
-			fInfo, err := lss.File.Stat()
+		if fInfo.Size() >= config.MFS {
+			lss.ActiveSegID += 1
+			lss.File.Close()
+			segment := core.NewSegment()
+			lss.File, err = segment.CreateSegment(lss.ActiveSegID, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC)
 			if err != nil {
 				log.Fatal(err)
 			}
+			lss.KeyDirs = append(lss.KeyDirs, core.KeyDir{SegmentID: lss.ActiveSegID, HashTable: core.NewHashTable(config.HashTableSize)})
 
-			if fInfo.Size() >= config.MFS {
-				lss.ActiveSegID += 1
-				lss.File.Close()
-				segment := core.NewSegment()
-				lss.File, err = segment.CreateSegment(lss.ActiveSegID, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC)
-				if err != nil {
-					log.Fatal(err)
-				}
-				lss.KeyDirs = append(lss.KeyDirs, core.KeyDir{SegmentID: lss.ActiveSegID, HashTable: core.NewHashTable(config.HashTableSize)})
-
-				// Creates manifest file to trigger merge worker
-				// Write should continue even if it fails to create manifest
-				_, err := os.Stat(config.Manifest)
-				if os.IsNotExist(err) {
-					f, _ := os.OpenFile(config.Manifest, os.O_CREATE, 0644)
-					f.Close()
-				}
-			}
-
-			_, err = lss.Set(data.Key, data.Value)
-			if err != nil {
-				log.Printf("failed to write data. Here is why: %s", err)
-				continue
+			// Creates manifest file to trigger merge worker
+			// Write should continue even if it fails to create manifest
+			_, err := os.Stat(config.Manifest)
+			if os.IsNotExist(err) {
+				f, _ := os.OpenFile(config.Manifest, os.O_CREATE, 0644)
+				f.Close()
 			}
 		}
+
+		_, err = lss.Set(data.Key, data.Value)
+		if err != nil {
+			log.Printf("failed to write data. Here is why: %s", err)
+			continue
+		}
+
 	}
 }
 
@@ -191,7 +200,7 @@ func handleMerge(lss *core.LSS) {
 
 					trimmedData := string(bytes.TrimSuffix(line, []byte("\n")))
 					dataSlice := strings.SplitN(trimmedData, ",", 2)
-					if len(dataSlice) == 2 && dataSlice[0] == key {
+					if len(dataSlice) == 2 && dataSlice[0] == key && dataSlice[1] != "" {
 						trimmed := strings.Trim(dataSlice[1], "\r")
 						data = strings.Trim(trimmed, "\"")
 						break
@@ -203,11 +212,14 @@ func handleMerge(lss *core.LSS) {
 				}
 
 				// Writes back data to active segment
-				writeReqests <- core.WriteRequest{
-					Key:         key,
-					Value:       data,
-					StorageFile: lss.File,
+				if data != "" {
+					writeReqests <- core.WriteRequest{
+						Key:         key,
+						Value:       data,
+						StorageFile: lss.File,
+					}
 				}
+
 			}
 
 			keyDirs = keyDirs[:i]
