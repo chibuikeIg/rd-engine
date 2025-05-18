@@ -218,6 +218,8 @@ func handleMerge(lss *core.LSS) {
 
 			// Delete Segment file
 			runtime.GC() // Temporary fix for files not being removed due other processes hanging on after closing
+
+			// TODO: Isolate file removal and delay for some minute before removal
 			filePath := f.Name()
 			err = os.Remove(filePath)
 			if err != nil {
