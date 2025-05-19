@@ -51,61 +51,59 @@ func main() {
 func readConn(conn net.Conn, lss *core.LSS) {
 	conn.Write([]byte("Connected\r\n"))
 
+	bufReader := bufio.NewReader(conn)
+
 	for {
-		bufReader := bufio.NewReader(conn)
-
-		for {
-			cmd, err := bufReader.ReadBytes('\n')
-			if err != nil {
-				log.Println("unable to read connection")
-				return
-			}
-
-			cmd = bytes.TrimSuffix(cmd, []byte("\n"))
-			cmd = bytes.TrimSuffix(cmd, []byte("\r"))
-			cmd = bytes.Trim(cmd, "\u0008")
-			cmd = bytes.Trim(cmd, "\b")
-			commands := strings.SplitN(string(cmd), " ", 3)
-
-			if len(commands) == 0 {
-				conn.Write([]byte("no valid commands provided\r\n"))
-			}
-
-			if commands[0] != "set" && commands[0] != "get" && commands[0] != "delete" {
-				conn.Write([]byte("no valid commands provided\r\n"))
-			}
-
-			if len(commands) == 3 && commands[0] == "set" {
-				writeReqests <- core.WriteRequest{
-					Key:   commands[1],
-					Value: strings.Trim(commands[2], "\b"),
-				}
-			}
-
-			if len(commands) == 2 && commands[0] == "get" {
-				result, err := lss.Get(commands[1])
-				result = bytes.Trim(result, "\"")
-				if err != nil {
-					result = []byte(err.Error())
-				} else if len(result) == 0 {
-					result = []byte("no record found")
-				}
-
-				result = append(result, '\r', '\n')
-				conn.Write(result)
-			}
-
-			if len(commands) == 2 && commands[0] == "delete" {
-
-				writeReqests <- core.WriteRequest{
-					Key:   commands[1],
-					Value: "",
-				}
-
-				conn.Write([]byte("deleted record"))
-			}
-
+		cmd, err := bufReader.ReadBytes('\n')
+		if err != nil {
+			log.Println("unable to read connection")
+			return
 		}
+
+		cmd = bytes.TrimSuffix(cmd, []byte("\n"))
+		cmd = bytes.TrimSuffix(cmd, []byte("\r"))
+		cmd = bytes.Trim(cmd, "\u0008")
+		cmd = bytes.Trim(cmd, "\b")
+		commands := strings.SplitN(string(cmd), " ", 3)
+
+		if len(commands) == 0 {
+			conn.Write([]byte("no valid commands provided\r\n"))
+		}
+
+		if commands[0] != "set" && commands[0] != "get" && commands[0] != "delete" {
+			conn.Write([]byte("no valid commands provided\r\n"))
+		}
+
+		if len(commands) == 3 && commands[0] == "set" {
+			writeReqests <- core.WriteRequest{
+				Key:   commands[1],
+				Value: strings.Trim(commands[2], "\b"),
+			}
+		}
+
+		if len(commands) == 2 && commands[0] == "get" {
+			result, err := lss.Get(commands[1])
+			result = bytes.Trim(result, "\"")
+			if err != nil {
+				result = []byte(err.Error())
+			} else if len(result) == 0 {
+				result = []byte("no record found")
+			}
+
+			result = append(result, '\r', '\n')
+			conn.Write(result)
+		}
+
+		if len(commands) == 2 && commands[0] == "delete" {
+
+			writeReqests <- core.WriteRequest{
+				Key:   commands[1],
+				Value: "",
+			}
+
+			conn.Write([]byte("deleted record"))
+		}
+
 	}
 }
 

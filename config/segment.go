@@ -1,6 +1,6 @@
 package config
 
-const MFS int64 = 166 // Maximum file/segment size
+const MFS int64 = 1166 // Maximum file/segment size
 const SegmentStorageBasePath = "./storage"
 const Manifest = "manifest.txt"
 const HashTableSize = 50
