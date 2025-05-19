@@ -1,9 +1,5 @@
 package core
 
-import (
-	"os"
-)
-
 type IndexValue struct {
 	SegmentId int
 	Offset    int64
@@ -15,8 +11,6 @@ type KeyDir struct {
 }
 
 type WriteRequest struct {
-	Key         string
-	Value       any
-	HashTable   *HashTable
-	StorageFile *os.File
+	Key   string
+	Value any
 }

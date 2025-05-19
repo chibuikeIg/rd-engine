@@ -77,9 +77,8 @@ func readConn(conn net.Conn, lss *core.LSS) {
 
 			if len(commands) == 3 && commands[0] == "set" {
 				writeReqests <- core.WriteRequest{
-					Key:         commands[1],
-					Value:       strings.Trim(commands[2], "\b"),
-					StorageFile: lss.Segment,
+					Key:   commands[1],
+					Value: strings.Trim(commands[2], "\b"),
 				}
 			}
 
@@ -99,9 +98,8 @@ func readConn(conn net.Conn, lss *core.LSS) {
 			if len(commands) == 2 && commands[0] == "delete" {
 
 				writeReqests <- core.WriteRequest{
-					Key:         commands[1],
-					Value:       "",
-					StorageFile: lss.Segment,
+					Key:   commands[1],
+					Value: "",
 				}
 
 				conn.Write([]byte("deleted record"))
@@ -212,9 +210,8 @@ func handleMerge(lss *core.LSS) {
 				// Writes back data to active segment
 				if data != "" {
 					writeReqests <- core.WriteRequest{
-						Key:         key,
-						Value:       data,
-						StorageFile: lss.Segment,
+						Key:   key,
+						Value: data,
 					}
 				}
 
