@@ -5,8 +5,8 @@ import (
 )
 
 type IndexValue struct {
-	FileId int
-	Offset int64
+	SegmentId int
+	Offset    int64
 }
 
 type KeyDir struct {

@@ -79,7 +79,7 @@ func readConn(conn net.Conn, lss *core.LSS) {
 				writeReqests <- core.WriteRequest{
 					Key:         commands[1],
 					Value:       strings.Trim(commands[2], "\b"),
-					StorageFile: lss.File,
+					StorageFile: lss.Segment,
 				}
 			}
 
@@ -101,7 +101,7 @@ func readConn(conn net.Conn, lss *core.LSS) {
 				writeReqests <- core.WriteRequest{
 					Key:         commands[1],
 					Value:       "",
-					StorageFile: lss.File,
+					StorageFile: lss.Segment,
 				}
 
 				conn.Write([]byte("deleted record"))
@@ -117,7 +117,7 @@ func handleDataWrites(lss *core.LSS) {
 	for data := range writeReqests {
 		// Checks file size and creates new segment
 		// if full
-		fInfo, err := lss.File.Stat()
+		fInfo, err := lss.Segment.Stat()
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -125,7 +125,7 @@ func handleDataWrites(lss *core.LSS) {
 		if fInfo.Size() >= config.MFS {
 			lss.ActiveSegID += 1
 			segment := core.NewSegment()
-			lss.File, err = segment.CreateSegment(lss.ActiveSegID, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC)
+			lss.Segment, err = segment.CreateSegment(lss.ActiveSegID, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -135,14 +135,13 @@ func handleDataWrites(lss *core.LSS) {
 			// Write should continue even if it fails to create manifest
 			_, err := os.Stat(config.Manifest)
 			if os.IsNotExist(err) {
-				f, _ := os.OpenFile(config.Manifest, os.O_CREATE, 0644)
-				f.Close()
+				lss.Manifest, _ = os.OpenFile(config.Manifest, os.O_CREATE, 0644)
 			}
 		}
 
 		_, err = lss.Set(data.Key, data.Value)
 		if err != nil {
-			log.Printf("failed to write data. Here is why: %s", err)
+			log.Printf("failed to write data. Here is why: %v", err)
 			continue
 		}
 
@@ -168,9 +167,9 @@ func handleMerge(lss *core.LSS) {
 			keyDirKeys := keyDirs[i].HashTable.Keys()
 
 			segment := core.NewSegment()
-			f, err := segment.CreateSegment(keyDirs[i].SegmentID, os.O_RDWR)
+			segmentF, err := segment.CreateSegment(keyDirs[i].SegmentID, os.O_RDWR)
 			if err != nil {
-				log.Printf("unable to open segment. Here is why: %s", err)
+				log.Printf("unable to open segment. Here is why: %v", err)
 				continue
 			}
 
@@ -188,8 +187,8 @@ func handleMerge(lss *core.LSS) {
 				indexVal := val.(core.IndexValue)
 
 				// Set the position for the next read.
-				f.Seek(indexVal.Offset, io.SeekStart)
-				ioReader := bufio.NewReader(f)
+				segmentF.Seek(indexVal.Offset, io.SeekStart)
+				ioReader := bufio.NewReader(segmentF)
 
 				var data string
 
@@ -215,7 +214,7 @@ func handleMerge(lss *core.LSS) {
 					writeReqests <- core.WriteRequest{
 						Key:         key,
 						Value:       data,
-						StorageFile: lss.File,
+						StorageFile: lss.Segment,
 					}
 				}
 
@@ -223,20 +222,24 @@ func handleMerge(lss *core.LSS) {
 
 			keyDirs = keyDirs[:i]
 
-			if err := f.Close(); err != nil {
-				log.Printf("failed to close file %s: %v", f.Name(), err)
+			if err := segmentF.Close(); err != nil {
+				log.Printf("unable to close file %s: %v", segmentF.Name(), err)
 			}
 
 			// Queue Segment file for deletion
-			toDeleteSegmentQueue <- f.Name()
+			toDeleteSegmentQueue <- segmentF.Name()
 		}
 
 		lss.KeyDirs = append(keyDirs, activeKeyDir)
 
 		// Delete Manifest file when compaction is complete
+		if err := lss.Manifest.Close(); err != nil {
+			log.Printf("unable to close manifest file %v", err)
+		}
+
 		err = os.Remove(config.Manifest)
 		if err != nil {
-			log.Printf("failed to remove manifest file after compaction %s", err)
+			log.Printf("unable to remove manifest file after compaction %v", err)
 			continue
 		}
 	}
@@ -281,7 +284,7 @@ func rebuildHashTable() []core.KeyDir {
 			dataSlice := strings.SplitN(trimmedData, ",", 2)
 
 			if len(dataSlice) == 2 {
-				keyDirHashTable.Set(dataSlice[0], core.IndexValue{FileId: segmentID, Offset: offset})
+				keyDirHashTable.Set(dataSlice[0], core.IndexValue{SegmentId: segmentID, Offset: offset})
 				offset += int64(len(line))
 			}
 
@@ -290,7 +293,9 @@ func rebuildHashTable() []core.KeyDir {
 			}
 		}
 		keyDirs = append(keyDirs, core.KeyDir{SegmentID: segmentID, HashTable: keyDirHashTable})
-		segmentF.Close()
+		if err := segmentF.Close(); err != nil {
+			log.Printf("unable to close segment file during hashtable rebuild %s: %v", segmentF.Name(), err)
+		}
 	}
 
 	return keyDirs
@@ -298,12 +303,11 @@ func rebuildHashTable() []core.KeyDir {
 
 func deleteSegments() {
 	for segment := range toDeleteSegmentQueue {
-		// Wait for 3secs before checking for manifest file
-		time.Sleep(60 * time.Second)
+		time.Sleep(10 * time.Second)
 
 		err := os.Remove(segment)
 		if err != nil {
-			log.Printf("failed to remove segment %s after compaction, here's why %s", segment, err)
+			log.Printf("unable to remove segment %s after compaction, here's why %v", segment, err)
 			continue
 		}
 	}

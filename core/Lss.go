@@ -14,9 +14,10 @@ import (
 
 // Log structured storage
 type LSS struct {
-	File        *os.File
+	Segment     *os.File
 	ActiveSegID int
 	KeyDirs     []KeyDir
+	Manifest    *os.File
 }
 
 func NewLSS() *LSS {
@@ -26,7 +27,7 @@ func NewLSS() *LSS {
 	if err != nil {
 		log.Fatal(err)
 	}
-	f, err := segment.CreateSegment(activeSegID, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC)
+	segmentF, err := segment.CreateSegment(activeSegID, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC)
 
 	if err != nil {
 		log.Fatalln(err)
@@ -35,20 +36,24 @@ func NewLSS() *LSS {
 	// Trigger compaction
 	// Creates manifest file to trigger compaction
 	segments, err := segment.Segments()
+	var manifest *os.File
 	if err == nil && len(segments) > 1 {
 		_, err := os.Stat(config.Manifest)
 		if os.IsNotExist(err) {
-			os.OpenFile(config.Manifest, os.O_CREATE, 0644)
+			manifest, err = os.OpenFile(config.Manifest, os.O_CREATE, 0644)
+			if err != nil {
+				log.Println("unable to create manifest for compaction")
+			}
 		}
 	}
 
-	return &LSS{File: f, ActiveSegID: activeSegID}
+	return &LSS{Segment: segmentF, ActiveSegID: activeSegID, Manifest: manifest}
 }
 
 func (lss *LSS) Set(key string, value any) (string, error) {
 
 	// Get Byte offset for indexing
-	byteOffset, err := lss.File.Seek(0, io.SeekEnd)
+	byteOffset, err := lss.Segment.Seek(0, io.SeekEnd)
 	if err != nil {
 		return key, err
 	}
@@ -62,7 +67,7 @@ func (lss *LSS) Set(key string, value any) (string, error) {
 	data := bytes.Join([][]byte{keyInByte, val}, []byte(","))
 	data = append(data, '\n')
 
-	if _, err := lss.File.Write(data); err != nil {
+	if _, err := lss.Segment.Write(data); err != nil {
 		return key, err
 	}
 
@@ -88,7 +93,7 @@ func (lss *LSS) Get(key string) ([]byte, error) {
 
 		// Open file for reading
 		segment := NewSegment()
-		f, err := segment.CreateSegment(indexVal.FileId, os.O_RDONLY)
+		f, err := segment.CreateSegment(indexVal.SegmentId, os.O_RDONLY)
 
 		if err != nil {
 			return nil, err
