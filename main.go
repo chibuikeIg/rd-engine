@@ -101,7 +101,7 @@ func readConn(conn net.Conn, lss *core.LSS) {
 				Value: "",
 			}
 
-			conn.Write([]byte("deleted record"))
+			conn.Write([]byte("deleted record\r\n"))
 		}
 
 	}

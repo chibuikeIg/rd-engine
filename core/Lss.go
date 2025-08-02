@@ -90,7 +90,6 @@ func (lss *LSS) Get(key string) ([]byte, error) {
 		}
 
 		indexVal := val.(IndexValue)
-
 		// Open file for reading
 		segment := NewSegment()
 		f, err := segment.CreateSegment(indexVal.SegmentId, os.O_RDONLY)

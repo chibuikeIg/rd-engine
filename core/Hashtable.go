@@ -55,7 +55,7 @@ func (ht HashTable) Get(key string) (any, error) {
 
 		currentBucket := ht.data[address]
 
-		if len(currentBucket) == 1 {
+		if len(currentBucket) == 1 && currentBucket[0].key == key {
 			return currentBucket[0].val, nil
 		}
 
