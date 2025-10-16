@@ -28,6 +28,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	fmt.Println("Listening on port 1379...")
+	defer l.Close()
+
+	// Create segments and hint files folder if they doesn't exist
+	if _, err := os.Stat(config.SegmentStorageBasePath); os.IsNotExist(err) {
+		err := os.MkdirAll(config.SegmentStorageBasePath, os.ModePerm)
+
+		if err != nil {
+			log.Fatal("unable to create segment directory")
+		}
+
+		err = os.Mkdir(config.HintFileStoragePath, os.ModePerm)
+
+		if err != nil {
+			log.Fatal("unable to create segment directory")
+		}
+	}
+
 	// Rebuilds HashTable
 	lss := core.NewLSS()
 	lss.KeyDirs = rebuildHashTable()
