@@ -188,7 +188,9 @@ func handleMerge(lss *core.LSS) {
 			keyDirKeys := keyDirs[i].HashTable.Keys()
 
 			segment := core.NewSegment()
-			segmentF, err := segment.CreateSegment(keyDirs[i].SegmentID, os.O_RDWR)
+			segmentID := keyDirs[i].SegmentID
+			fmt.Printf("Merging segment %d\n", segmentID)
+			segmentF, err := segment.CreateSegment(segmentID, os.O_RDWR)
 			if err != nil {
 				log.Printf("unable to open segment. Here is why: %v", err)
 				continue
@@ -247,7 +249,7 @@ func handleMerge(lss *core.LSS) {
 			}
 
 			// Queue Segment file for deletion
-			toDeleteSegmentQueue <- segmentF.Name()
+			toDeleteSegmentQueue <- utilities.SegmentIDToString(segmentID)
 		}
 
 		lss.KeyDirs = append(keyDirs, activeKeyDir)
@@ -291,7 +293,6 @@ func rebuildHashTable() []core.KeyDir {
 		hf := core.NewHintFile()
 		keyDirHashTable, err := hf.Read(segmentID)
 		if err == nil {
-			fmt.Println(keyDirHashTable)
 			keyDirs = append(keyDirs, core.KeyDir{SegmentID: segmentID, HashTable: keyDirHashTable})
 			continue
 		}
@@ -330,12 +331,20 @@ func rebuildHashTable() []core.KeyDir {
 }
 
 func deleteSegments() {
-	for segment := range toDeleteSegmentQueue {
+	for segmentId := range toDeleteSegmentQueue {
 		time.Sleep(10 * time.Second)
 
+		segment := config.SegmentStorageBasePath + "/" + segmentId + ".data.txt"
+		hintFile := config.HintFileStoragePath + "/" + segmentId + ".data.hint"
 		err := os.Remove(segment)
 		if err != nil {
 			log.Printf("unable to remove segment %s after compaction, here's why %v", segment, err)
+			continue
+		}
+
+		err = os.Remove(hintFile)
+		if err != nil {
+			log.Printf("unable to remove segment hintfile %s after compaction, here's why %v", hintFile, err)
 			continue
 		}
 	}
