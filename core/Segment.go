@@ -3,7 +3,6 @@ package core
 import (
 	"io/fs"
 	"os"
-	"strconv"
 
 	"reversed-database.engine/config"
 	"reversed-database.engine/utilities"
@@ -60,11 +59,7 @@ func (s *Segment) GetActiveSegmentID() (int, error) {
 }
 
 func (s *Segment) CreateSegment(segmentID int, flag int) (*os.File, error) {
-	formatedSegmentID := strconv.Itoa(segmentID)
-	if segmentID < 10 {
-		formatedSegmentID = "0" + formatedSegmentID
-	}
-
+	formatedSegmentID := utilities.SegmentIDToString(segmentID)
 	file := config.SegmentStorageBasePath + "/" + formatedSegmentID + ".data.txt"
 	// Create a single instance of file
 	f, err := os.OpenFile(file, flag, 0644)

@@ -14,3 +14,12 @@ func GetSegmentIdFromFname(fn string) (int, error) {
 	}
 	return segmentId, nil
 }
+
+func SegmentIDToString(segmentId int) string {
+	segmentID := strconv.Itoa(segmentId)
+	if segmentId < 10 {
+		segmentID = "0" + segmentID
+	}
+
+	return segmentID
+}

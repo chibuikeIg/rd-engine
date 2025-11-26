@@ -7,8 +7,8 @@ import (
 )
 
 type HashTableBucket struct {
-	key string
-	val any
+	Key string
+	Val any
 }
 
 type HashTable struct {
@@ -55,13 +55,13 @@ func (ht HashTable) Get(key string) (any, error) {
 
 		currentBucket := ht.data[address]
 
-		if len(currentBucket) == 1 && currentBucket[0].key == key {
-			return currentBucket[0].val, nil
+		if len(currentBucket) == 1 && currentBucket[0].Key == key {
+			return currentBucket[0].Val, nil
 		}
 
 		for i := len(currentBucket) - 1; i >= 0; i-- {
-			if currentBucket[i].key == key {
-				return currentBucket[i].val, nil
+			if currentBucket[i].Key == key {
+				return currentBucket[i].Val, nil
 			}
 		}
 
@@ -84,13 +84,13 @@ func (ht HashTable) Keys() []string {
 
 		if len(buckets) == 1 {
 
-			foundKeys = append(foundKeys, buckets[0].key)
+			foundKeys = append(foundKeys, buckets[0].Key)
 
 		} else {
 
 			for _, bucket := range buckets {
-				if !slices.Contains(foundKeys, bucket.key) {
-					foundKeys = append(foundKeys, bucket.key)
+				if !slices.Contains(foundKeys, bucket.Key) {
+					foundKeys = append(foundKeys, bucket.Key)
 				}
 			}
 

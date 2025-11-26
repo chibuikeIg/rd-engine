@@ -17,8 +17,10 @@ import (
 	"reversed-database.engine/utilities"
 )
 
-var writeReqests = make(chan core.WriteRequest, config.WriteRequestBufferSize)
+var writeRequests = make(chan core.WriteRequest, config.WriteRequestBufferSize)
 var toDeleteSegmentQueue = make(chan string, config.ToDeleteSegmentBufferSize)
+
+var writeCounter = 0
 
 func main() {
 
@@ -38,11 +40,13 @@ func main() {
 		if err != nil {
 			log.Fatal("unable to create segment directory")
 		}
+	}
 
-		err = os.Mkdir(config.HintFileStoragePath, os.ModePerm)
+	if _, err := os.Stat(config.HintFileStoragePath); os.IsNotExist(err) {
+		err := os.MkdirAll(config.HintFileStoragePath, os.ModePerm)
 
 		if err != nil {
-			log.Fatal("unable to create segment directory")
+			log.Fatal("unable to create hint file storage directory")
 		}
 	}
 
@@ -51,6 +55,7 @@ func main() {
 	lss.KeyDirs = rebuildHashTable()
 
 	go handleDataWrites(lss)
+	go persistKeyDirs(lss)
 	go handleMerge(lss)
 	go deleteSegments()
 
@@ -93,7 +98,7 @@ func readConn(conn net.Conn, lss *core.LSS) {
 		}
 
 		if len(commands) == 3 && commands[0] == "set" {
-			writeReqests <- core.WriteRequest{
+			writeRequests <- core.WriteRequest{
 				Key:   commands[1],
 				Value: strings.Trim(commands[2], "\b"),
 			}
@@ -114,7 +119,7 @@ func readConn(conn net.Conn, lss *core.LSS) {
 
 		if len(commands) == 2 && commands[0] == "delete" {
 
-			writeReqests <- core.WriteRequest{
+			writeRequests <- core.WriteRequest{
 				Key:   commands[1],
 				Value: "",
 			}
@@ -128,7 +133,7 @@ func readConn(conn net.Conn, lss *core.LSS) {
 // Handle write serialization
 func handleDataWrites(lss *core.LSS) {
 
-	for data := range writeReqests {
+	for data := range writeRequests {
 		// Checks file size and creates new segment
 		// if full
 		fInfo, err := lss.Segment.Stat()
@@ -153,12 +158,14 @@ func handleDataWrites(lss *core.LSS) {
 			}
 		}
 
+		// Store data in LSS
 		_, err = lss.Set(data.Key, data.Value)
 		if err != nil {
 			log.Printf("failed to write data. Here is why: %v", err)
 			continue
 		}
-
+		// Increment write counter
+		writeCounter += 1
 	}
 }
 
@@ -225,7 +232,7 @@ func handleMerge(lss *core.LSS) {
 
 				// Writes back data to active segment
 				if data != "" {
-					writeReqests <- core.WriteRequest{
+					writeRequests <- core.WriteRequest{
 						Key:   key,
 						Value: data,
 					}
@@ -280,13 +287,21 @@ func rebuildHashTable() []core.KeyDir {
 			log.Fatal(err)
 		}
 
+		// Find hint file for segment here
+		hf := core.NewHintFile()
+		keyDirHashTable, err := hf.Read(segmentID)
+		if err == nil {
+			fmt.Println(keyDirHashTable)
+			keyDirs = append(keyDirs, core.KeyDir{SegmentID: segmentID, HashTable: keyDirHashTable})
+			continue
+		}
+
 		segmentF, err := segment.CreateSegment(segmentID, os.O_RDWR)
 		if err != nil {
 			log.Fatal(err)
 		}
 
 		// Instantiate Hashtable
-		keyDirHashTable := core.NewHashTable(config.HashTableSize)
 		ioReader := bufio.NewReader(segmentF)
 		offset := int64(0)
 
@@ -322,6 +337,23 @@ func deleteSegments() {
 		if err != nil {
 			log.Printf("unable to remove segment %s after compaction, here's why %v", segment, err)
 			continue
+		}
+	}
+}
+
+func persistKeyDirs(lss *core.LSS) error {
+	for {
+		if writeCounter >= config.KeyDirPersistThreshold {
+			// Persist KeyDirs to hint file
+			keyDir := lss.KeyDirs[len(lss.KeyDirs)-1]
+
+			hintFile := core.NewHintFile()
+			err := hintFile.Write(keyDir)
+			if err != nil {
+				log.Printf("unable to persist hint file for segment %d: %v", keyDir.SegmentID, err)
+			} else {
+				writeCounter = 0
+			}
 		}
 	}
 }
