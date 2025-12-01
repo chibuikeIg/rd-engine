@@ -3,13 +3,18 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"reversed-database.engine/config"
@@ -20,18 +25,17 @@ import (
 var writeRequests = make(chan core.WriteRequest, config.WriteRequestBufferSize)
 var toDeleteSegmentQueue = make(chan string, config.ToDeleteSegmentBufferSize)
 
-var writeCounter = 0
+var writeCounter atomic.Int64
 
 func main() {
 
 	l, err := net.Listen("tcp", "0.0.0.0:1379")
 	if err != nil {
-		fmt.Println("Failed to bind to port 1379")
+		log.Printf("Failed to bind to port 1379")
 		os.Exit(1)
 	}
 
 	fmt.Println("Listening on port 1379...")
-	defer l.Close()
 
 	// Create segments and hint files folder if they doesn't exist
 	if _, err := os.Stat(config.SegmentStorageBasePath); os.IsNotExist(err) {
@@ -53,216 +57,281 @@ func main() {
 	// Rebuilds HashTable
 	lss := core.NewLSS()
 	lss.KeyDirs = rebuildHashTable()
+	ctx, cancel := context.WithCancel(context.Background())
+	wg := &sync.WaitGroup{}
 
-	go handleDataWrites(lss)
-	go persistKeyDirs(lss)
-	go handleMerge(lss)
-	go deleteSegments()
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		cancel()
+		l.Close()
+		wg.Wait()
+	}()
 
+	wg.Add(4)
+	go handleDataWrites(ctx, lss, writeRequests, wg)
+	go handleMerge(ctx, lss, wg, writeRequests, toDeleteSegmentQueue)
+	go deleteSegments(ctx, toDeleteSegmentQueue, wg)
+	go persistKeyDirs(ctx, lss, wg)
+
+	// Accept incoming connections
 	for {
 
-		conn, err := l.Accept()
-		if err != nil {
-			fmt.Println("Error accepting connection: ", err.Error())
-			continue
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			wg.Add(1)
+			conn, err := l.Accept()
+			if err != nil {
+				log.Printf("Error accepting connection: %s", err.Error())
+				continue
+			}
+			go readConn(ctx, conn, lss, writeRequests, wg)
 		}
 
-		go readConn(conn, lss)
 	}
 }
 
-func readConn(conn net.Conn, lss *core.LSS) {
+func readConn(ctx context.Context, conn net.Conn, lss *core.LSS, writeRequests chan<- core.WriteRequest, wg *sync.WaitGroup) {
+
+	defer wg.Done()
+	defer conn.Close()
 	conn.Write([]byte("Connected\r\n"))
 
 	bufReader := bufio.NewReader(conn)
 
 	for {
-		cmd, err := bufReader.ReadBytes('\n')
-		if err != nil {
-			log.Println("unable to read connection")
+
+		select {
+		case <-ctx.Done():
 			return
-		}
-
-		cmd = bytes.TrimSuffix(cmd, []byte("\n"))
-		cmd = bytes.TrimSuffix(cmd, []byte("\r"))
-		cmd = bytes.Trim(cmd, "\u0008")
-		cmd = bytes.Trim(cmd, "\b")
-		commands := strings.SplitN(string(cmd), " ", 3)
-
-		if len(commands) == 0 {
-			conn.Write([]byte("no valid commands provided\r\n"))
-		}
-
-		if commands[0] != "set" && commands[0] != "get" && commands[0] != "delete" {
-			conn.Write([]byte("no valid commands provided\r\n"))
-		}
-
-		if len(commands) == 3 && commands[0] == "set" {
-			writeRequests <- core.WriteRequest{
-				Key:   commands[1],
-				Value: strings.Trim(commands[2], "\b"),
-			}
-		}
-
-		if len(commands) == 2 && commands[0] == "get" {
-			result, err := lss.Get(commands[1])
-			result = bytes.Trim(result, "\"")
+		default:
+			cmd, err := bufReader.ReadBytes('\n')
 			if err != nil {
-				result = []byte(err.Error())
-			} else if len(result) == 0 {
-				result = []byte("no record found")
+				log.Printf("unable to read connection")
+				return
 			}
 
-			result = append(result, '\r', '\n')
-			conn.Write(result)
-		}
+			cmd = bytes.TrimSuffix(cmd, []byte("\n"))
+			cmd = bytes.TrimSuffix(cmd, []byte("\r"))
+			cmd = bytes.Trim(cmd, "\u0008")
+			cmd = bytes.Trim(cmd, "\b")
+			commands := strings.SplitN(string(cmd), " ", 3)
 
-		if len(commands) == 2 && commands[0] == "delete" {
-
-			writeRequests <- core.WriteRequest{
-				Key:   commands[1],
-				Value: "",
+			if len(commands) == 0 {
+				conn.Write([]byte("no valid commands provided\r\n"))
 			}
 
-			conn.Write([]byte("deleted record\r\n"))
+			if commands[0] != "set" && commands[0] != "get" && commands[0] != "delete" {
+				conn.Write([]byte("no valid commands provided\r\n"))
+			}
+
+			if len(commands) == 3 && commands[0] == "set" {
+
+				select {
+				case writeRequests <- core.WriteRequest{
+					Key:   commands[1],
+					Value: strings.Trim(commands[2], "\b"),
+				}:
+				case <-ctx.Done():
+					return
+				}
+
+			}
+
+			if len(commands) == 2 && commands[0] == "get" {
+				result, err := lss.Get(commands[1])
+				result = bytes.Trim(result, "\"")
+				if err != nil {
+					result = []byte(err.Error())
+				} else if len(result) == 0 {
+					result = []byte("no record found")
+				}
+
+				result = append(result, '\r', '\n')
+				conn.Write(result)
+			}
+
+			if len(commands) == 2 && commands[0] == "delete" {
+
+				select {
+				case <-ctx.Done():
+					return
+				case writeRequests <- core.WriteRequest{
+					Key:   commands[1],
+					Value: "",
+				}:
+				}
+
+				conn.Write([]byte("deleted record\r\n"))
+			}
 		}
 
 	}
 }
 
 // Handle write serialization
-func handleDataWrites(lss *core.LSS) {
+func handleDataWrites(ctx context.Context, lss *core.LSS, writeRequests <-chan core.WriteRequest, wg *sync.WaitGroup) {
+	defer wg.Done()
 
-	for data := range writeRequests {
-		// Checks file size and creates new segment
-		// if full
-		fInfo, err := lss.Segment.Stat()
-		if err != nil {
-			log.Fatal(err)
-		}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case data, ok := <-writeRequests:
+			if !ok {
+				return
+			}
 
-		if fInfo.Size() >= config.MFS {
-			lss.ActiveSegID += 1
-			segment := core.NewSegment()
-			lss.Segment, err = segment.CreateSegment(lss.ActiveSegID, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC)
+			// Checks file size and creates new segment
+			// if full
+			fInfo, err := lss.Segment.Stat()
 			if err != nil {
 				log.Fatal(err)
 			}
-			lss.KeyDirs = append(lss.KeyDirs, core.KeyDir{SegmentID: lss.ActiveSegID, HashTable: core.NewHashTable(config.HashTableSize)})
 
-			// Creates manifest file to trigger merge worker
-			// Write should continue even if it fails to create manifest
-			_, err := os.Stat(config.Manifest)
-			if os.IsNotExist(err) {
-				lss.Manifest, _ = os.OpenFile(config.Manifest, os.O_CREATE, 0644)
+			if fInfo.Size() >= config.MFS {
+				lss.ActiveSegID += 1
+				segment := core.NewSegment()
+				lss.Segment, err = segment.CreateSegment(lss.ActiveSegID, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC)
+				if err != nil {
+					log.Fatal(err)
+				}
+				lss.KeyDirs = append(lss.KeyDirs, core.KeyDir{SegmentID: lss.ActiveSegID, HashTable: core.NewHashTable(config.HashTableSize)})
+
+				// Creates manifest file to trigger merge worker
+				// Write should continue even if it fails to create manifest
+				_, err := os.Stat(config.Manifest)
+				if os.IsNotExist(err) {
+					lss.Manifest, _ = os.OpenFile(config.Manifest, os.O_CREATE, 0644)
+				}
 			}
-		}
 
-		// Store data in LSS
-		_, err = lss.Set(data.Key, data.Value)
-		if err != nil {
-			log.Printf("failed to write data. Here is why: %v", err)
-			continue
+			// Store data in LSS
+			_, err = lss.Set(data.Key, data.Value)
+			if err != nil {
+				log.Printf("failed to write data. Here is why: %v", err)
+				continue
+			}
+			// Increment write counter
+			writeCounter.Add(1)
 		}
-		// Increment write counter
-		writeCounter += 1
 	}
+
 }
 
-func handleMerge(lss *core.LSS) {
+func handleMerge(ctx context.Context, lss *core.LSS, wg *sync.WaitGroup, writeRequests chan<- core.WriteRequest, toDeleteSegmentQueue chan<- string) {
+
+	defer wg.Done()
+
 	for {
 
-		// Wait for 3secs before checking for manifest file
-		time.Sleep(5 * time.Second)
-
-		_, err := os.Stat(config.Manifest)
-		if os.IsNotExist(err) {
-			continue
-		}
-
-		index := len(lss.KeyDirs) - 1
-		activeKeyDir := lss.KeyDirs[index]
-		keyDirs := lss.KeyDirs[:index]
-		// Starts Merge process
-		for i := len(keyDirs) - 1; i >= 0; i-- {
-			keyDirKeys := keyDirs[i].HashTable.Keys()
-
-			segment := core.NewSegment()
-			segmentID := keyDirs[i].SegmentID
-			fmt.Printf("Merging segment %d\n", segmentID)
-			segmentF, err := segment.CreateSegment(segmentID, os.O_RDWR)
-			if err != nil {
-				log.Printf("unable to open segment. Here is why: %v", err)
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			// Wait for some secs before checking for manifest file
+			time.Sleep(5 * time.Second)
+			_, err := os.Stat(config.Manifest)
+			if os.IsNotExist(err) {
 				continue
 			}
 
-			for _, key := range keyDirKeys {
-				// Checks key doesn't already exist in active segment
-				if slices.Contains(activeKeyDir.HashTable.Keys(), key) {
-					continue
-				}
+			index := len(lss.KeyDirs) - 1
+			activeKeyDir := lss.KeyDirs[index]
+			keyDirs := lss.KeyDirs[:index]
+			// Starts Merge process
+			for i := len(keyDirs) - 1; i >= 0; i-- {
+				keyDirKeys := keyDirs[i].HashTable.Keys()
 
-				val, err := keyDirs[i].HashTable.Get(key)
+				segment := core.NewSegment()
+				segmentID := keyDirs[i].SegmentID
+				log.Printf("Merging segment %d\n", segmentID)
+				segmentF, err := segment.CreateSegment(segmentID, os.O_RDWR)
 				if err != nil {
+					log.Printf("unable to open segment. Here is why: %v", err)
 					continue
 				}
 
-				indexVal := val.(core.IndexValue)
-
-				// Set the position for the next read.
-				segmentF.Seek(indexVal.Offset, io.SeekStart)
-				ioReader := bufio.NewReader(segmentF)
-
-				var data string
-
-				for {
-					// Reads until newline ('\n')
-					line, err := ioReader.ReadBytes('\n')
-
-					trimmedData := string(bytes.TrimSuffix(line, []byte("\n")))
-					dataSlice := strings.SplitN(trimmedData, ",", 2)
-					if len(dataSlice) == 2 && dataSlice[0] == key && dataSlice[1] != "" {
-						trimmed := strings.Trim(dataSlice[1], "\r")
-						data = strings.Trim(trimmed, "\"")
-						break
+				for _, key := range keyDirKeys {
+					// Checks key doesn't already exist in active segment
+					if slices.Contains(activeKeyDir.HashTable.Keys(), key) {
+						continue
 					}
 
+					val, err := keyDirs[i].HashTable.Get(key)
 					if err != nil {
-						break
+						continue
 					}
+
+					indexVal := val.(core.IndexValue)
+
+					// Set the position for the next read.
+					segmentF.Seek(indexVal.Offset, io.SeekStart)
+					ioReader := bufio.NewReader(segmentF)
+
+					var data string
+
+					for {
+						// Reads until newline ('\n')
+						line, err := ioReader.ReadBytes('\n')
+
+						trimmedData := string(bytes.TrimSuffix(line, []byte("\n")))
+						dataSlice := strings.SplitN(trimmedData, ",", 2)
+						if len(dataSlice) == 2 && dataSlice[0] == key && dataSlice[1] != "" {
+							trimmed := strings.Trim(dataSlice[1], "\r")
+							data = strings.Trim(trimmed, "\"")
+							break
+						}
+
+						if err != nil {
+							break
+						}
+					}
+
+					// Writes back data to active segment
+					if data != "" {
+						select {
+						case writeRequests <- core.WriteRequest{
+							Key:   key,
+							Value: data,
+						}:
+						case <-ctx.Done():
+							return
+						}
+					}
+
 				}
 
-				// Writes back data to active segment
-				if data != "" {
-					writeRequests <- core.WriteRequest{
-						Key:   key,
-						Value: data,
-					}
+				keyDirs = keyDirs[:i]
+
+				if err := segmentF.Close(); err != nil {
+					log.Printf("unable to close file %s: %v", segmentF.Name(), err)
+				}
+
+				// Queue Segment file for deletion
+				select {
+				case toDeleteSegmentQueue <- utilities.SegmentIDToString(segmentID):
+				case <-ctx.Done():
+					return
 				}
 
 			}
 
-			keyDirs = keyDirs[:i]
+			lss.KeyDirs = append(keyDirs, activeKeyDir)
 
-			if err := segmentF.Close(); err != nil {
-				log.Printf("unable to close file %s: %v", segmentF.Name(), err)
+			// Delete Manifest file when compaction is complete
+			if err := lss.Manifest.Close(); err != nil {
+				log.Printf("unable to close manifest file %v", err)
 			}
 
-			// Queue Segment file for deletion
-			toDeleteSegmentQueue <- utilities.SegmentIDToString(segmentID)
-		}
-
-		lss.KeyDirs = append(keyDirs, activeKeyDir)
-
-		// Delete Manifest file when compaction is complete
-		if err := lss.Manifest.Close(); err != nil {
-			log.Printf("unable to close manifest file %v", err)
-		}
-
-		err = os.Remove(config.Manifest)
-		if err != nil {
-			log.Printf("unable to remove manifest file after compaction %v", err)
-			continue
+			err = os.Remove(config.Manifest)
+			if err != nil {
+				log.Printf("unable to remove manifest file after compaction %v", err)
+				continue
+			}
 		}
 	}
 }
@@ -330,39 +399,59 @@ func rebuildHashTable() []core.KeyDir {
 	return keyDirs
 }
 
-func deleteSegments() {
-	for segmentId := range toDeleteSegmentQueue {
-		time.Sleep(10 * time.Second)
+func deleteSegments(ctx context.Context, toDeleteSegmentQueue <-chan string, wg *sync.WaitGroup) {
+	defer wg.Done()
 
-		segment := config.SegmentStorageBasePath + "/" + segmentId + ".data.txt"
-		hintFile := config.HintFileStoragePath + "/" + segmentId + ".data.hint"
-		err := os.Remove(segment)
-		if err != nil {
-			log.Printf("unable to remove segment %s after compaction, here's why %v", segment, err)
-			continue
-		}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case segmentId, ok := <-toDeleteSegmentQueue:
 
-		err = os.Remove(hintFile)
-		if err != nil {
-			log.Printf("unable to remove segment hintfile %s after compaction, here's why %v", hintFile, err)
-			continue
+			if !ok {
+				return
+			}
+
+			segment := config.SegmentStorageBasePath + "/" + segmentId + ".data.txt"
+			hintFile := config.HintFileStoragePath + "/" + segmentId + ".data.hint"
+			err := os.Remove(segment)
+			if err != nil {
+				log.Printf("unable to remove segment %s after compaction, here's why %v", segment, err)
+				continue
+			}
+
+			err = os.Remove(hintFile)
+			if err != nil {
+				log.Printf("unable to remove segment hintfile %s after compaction, here's why %v", hintFile, err)
+				continue
+			}
 		}
 	}
 }
 
-func persistKeyDirs(lss *core.LSS) error {
-	for {
-		if writeCounter >= config.KeyDirPersistThreshold {
-			// Persist KeyDirs to hint file
-			keyDir := lss.KeyDirs[len(lss.KeyDirs)-1]
+func persistKeyDirs(ctx context.Context, lss *core.LSS, wg *sync.WaitGroup) {
 
-			hintFile := core.NewHintFile()
-			err := hintFile.Write(keyDir)
-			if err != nil {
-				log.Printf("unable to persist hint file for segment %d: %v", keyDir.SegmentID, err)
-			} else {
-				writeCounter = 0
+	defer wg.Done()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if writeCounter.Load() >= config.KeyDirPersistThreshold {
+				// Persist KeyDirs to hint file
+				keyDir := lss.KeyDirs[len(lss.KeyDirs)-1]
+
+				hintFile := core.NewHintFile()
+				err := hintFile.Write(keyDir)
+				if err != nil {
+					log.Printf("unable to persist hint file for segment %d: %v", keyDir.SegmentID, err)
+				}
+
+				writeCounter.Store(0)
 			}
+		case <-ctx.Done():
+			return
 		}
+
 	}
 }
