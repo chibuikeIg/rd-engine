@@ -10,7 +10,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -77,12 +76,12 @@ func main() {
 
 	// Accept incoming connections
 	for {
-
+		wg.Add(1)
 		select {
 		case <-ctx.Done():
 			return
 		default:
-			wg.Add(1)
+
 			conn, err := l.Accept()
 			if err != nil {
 				log.Printf("Error accepting connection: %s", err.Error())
@@ -189,7 +188,7 @@ func handleDataWrites(ctx context.Context, lss *core.LSS, writeRequests <-chan c
 			// if full
 			fInfo, err := lss.Segment.Stat()
 			if err != nil {
-				log.Fatal(err)
+				log.Printf("failed to get file stats. Here is why: %v", err)
 			}
 
 			if fInfo.Size() >= config.MFS {
@@ -198,6 +197,7 @@ func handleDataWrites(ctx context.Context, lss *core.LSS, writeRequests <-chan c
 				lss.Segment, err = segment.CreateSegment(lss.ActiveSegID, os.O_APPEND|os.O_CREATE|os.O_RDWR|os.O_SYNC)
 				if err != nil {
 					log.Fatal(err)
+					continue
 				}
 				lss.KeyDirs = append(lss.KeyDirs, core.KeyDir{SegmentID: lss.ActiveSegID, HashTable: core.NewHashTable(config.HashTableSize)})
 
@@ -213,7 +213,6 @@ func handleDataWrites(ctx context.Context, lss *core.LSS, writeRequests <-chan c
 			_, err = lss.Set(data.Key, data.Value)
 			if err != nil {
 				log.Printf("failed to write data. Here is why: %v", err)
-				continue
 			}
 			// Increment write counter
 			writeCounter.Add(1)
@@ -257,7 +256,7 @@ func handleMerge(ctx context.Context, lss *core.LSS, wg *sync.WaitGroup, writeRe
 
 				for _, key := range keyDirKeys {
 					// Checks key doesn't already exist in active segment
-					if slices.Contains(activeKeyDir.HashTable.Keys(), key) {
+					if val, _ := activeKeyDir.HashTable.Get(key); val != nil {
 						continue
 					}
 
